@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include <stdio.h>
 #include <stdint.h>
 #include <immintrin.h>
@@ -17,9 +19,7 @@ static void clock_ns(Timespec* t) {
 typedef uint64_t u64;
 
 static u64 elapsed_ns(Timespec start, Timespec stop) {
-  u64 acpre = (u64)(stop.tv_sec - start.tv_sec) * BILLION
-               + (u64)(stop.tv_nsec - start.tv_nsec);
-  return acpre;
+  return (u64)(stop.tv_sec - start.tv_sec) * BILLION + (u64)(stop.tv_nsec - start.tv_nsec);
 }
 
 __m128 m128_scan(__m128 x) {
@@ -85,7 +85,6 @@ void scan_inplace_ss4(float* xs, size_t n) {
         c = m128_scan(v[i + 2]); // lkji
         d = m128_scan(v[i + 3]); // ponm
 
-        // 4 adds, 3 shuffles
         sa = _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 3, 3, 3)); // sabcd
         sc = _mm_shuffle_ps(c, c, _MM_SHUFFLE(3, 3, 3, 3)); // ijkl
 
@@ -116,7 +115,8 @@ int main() {
     size_t rounds = 1000000000;
 
     Timespec start, stop;
-    if (0) {
+
+    {
         size_t N = 32;
         float* xs = aligned_alloc(16, sizeof(float)*N);
         for (size_t i = 0; i < N; i++) { xs[i] = i * 0.1; }

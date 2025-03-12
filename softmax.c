@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 #include <stdio.h>
 #include <stdint.h>
 #include <math.h>
@@ -11,7 +13,6 @@
 
 typedef struct timespec Timespec;
 
-
 #define BILLION  1000000000LL
 
 static void clock_ns(Timespec* t) {
@@ -21,15 +22,61 @@ static void clock_ns(Timespec* t) {
 typedef uint64_t u64;
 
 static u64 elapsed_ns(Timespec start, Timespec stop) {
-  u64 acpre = (u64)(stop.tv_sec - start.tv_sec) * BILLION
-               + (u64)(stop.tv_nsec - start.tv_nsec);
-  return acpre;
+  return (u64)(stop.tv_sec - start.tv_sec) * BILLION + (u64)(stop.tv_nsec - start.tv_nsec);
 }
 
 #define INLINE __attribute__((always_inline))
 
+// following two functions pulled from presum.c
+static __m128 INLINE m128_scan(__m128 x) {
+    // d    c   b  a
+    // c    b   a  0 +
+    // dc   cb  ba a
+    // ba   a   0  0 +
+    // dcba cba ba a
+    x = _mm_add_ps(x, _mm_slli_si128(x, 4));
+    // compiler chooses a movelh with zero
+    x = _mm_add_ps(x, _mm_slli_si128(x, 8));
+    return x;
+}
+
+static void INLINE scan_inplace_ss4(float* xs, size_t N, int dodiv, float div) {
+    __builtin_assume(N >= 16);
+
+    __m128* v = (__m128*)__builtin_assume_aligned(xs, 16);
+    __m128 sum = _mm_set1_epi32(0);
+    __m128 a, b, c, d, sa, sb, sc;
+    __m128 vdiv = _mm_set1_epi32(div);
+    for (size_t i = 0; i < N/4; i += 4) {
+#define LOAD(x) (dodiv ? _mm_div_ps(x, vdiv) : x)
+        a = _mm_add_ps(sum, m128_scan(LOAD(v[i])));
+
+        b = m128_scan(LOAD(v[i + 1])); // hgfe gfe fe e
+        c = m128_scan(LOAD(v[i + 2])); // lkji
+        d = m128_scan(LOAD(v[i + 3])); // ponm
+#undef LOAD
+
+        sa = _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 3, 3, 3)); // sabcd
+        sc = _mm_shuffle_ps(c, c, _MM_SHUFFLE(3, 3, 3, 3)); // ijkl
+
+        b = _mm_add_ps(b, sa);
+        d = _mm_add_ps(d, sc); // ijklmnop
+
+        sb = _mm_shuffle_ps(b, b, _MM_SHUFFLE(3, 3, 3, 3)); // sabcdefgh
+        c = _mm_add_ps(c, sb); // sabcdefghijkl
+        d = _mm_add_ps(d, sb);
+
+        sum = _mm_shuffle_ps(d, d, _MM_SHUFFLE(3, 3, 3, 3));
+
+        v[i + 0] = a;
+        v[i + 1] = b;
+        v[i + 2] = c;
+        v[i + 3] = d;
+    }
+}
+
 static void INLINE do_sum(float* xs, size_t N, int sumkind) {
-    __builtin_assume(N >= 8);
+    __builtin_assume(N >= 16);
 
     float sum = 0;
     for (size_t i = 0; i < N; i++) {
@@ -44,6 +91,8 @@ static void INLINE do_sum(float* xs, size_t N, int sumkind) {
         for (size_t i = 1; i < N; i++) {
             xs[i] = xs[i - 1] + xs[i] / sum;
         }
+    } else if (sumkind == 2) {
+        scan_inplace_ss4(xs, N, 1, sum);
     }
 }
 
@@ -116,6 +165,11 @@ void softmax_sleefredux_presum(float* restrict src, float* restrict dst, size_t 
     do_sum(dst, N, 1);
 }
 
+void softmax_sleefredux_presum_ss4(float* restrict src, float* restrict dst, size_t N) {
+    do_exp(src, dst, N, 2, 0, 0.0);
+    do_sum(dst, N, 2);
+}
+
 // -- tempdiv
 
 void softmax_math_sum_tempdiv(float* restrict src, float* restrict dst, size_t N, float temp) {
@@ -148,7 +202,13 @@ void softmax_sleefredux_presum_tempdiv(float* restrict src, float* restrict dst,
     do_sum(dst, N, 1);
 }
 
+void softmax_sleefredux_presum_ss4_tempdiv(float* restrict src, float* restrict dst, size_t N, float temp) {
+    do_exp(src, dst, N, 2, 1, temp);
+    do_sum(dst, N, 2);
+}
+
 // -- tempmul
+// these all ended up being the same as the compiler uses mul over div
 void softmax_math_sum_tempmul(float* restrict src, float* restrict dst, size_t N, float temp) {
     do_exp(src, dst, N, 0, 2, temp);
     do_sum(dst, N, 0);
@@ -198,7 +258,7 @@ int main(int argc, char** argv) {
 
     size_t rounds = 1000000;
 
-    for (size_t N = 8; N <= 512; N *= 2) {
+    for (size_t N = 16; N <= 512; N *= 2) {
         float* xs = aligned_alloc(32, sizeof(float)*N*2);
         float* dst = xs + N;
         for (size_t i = 0; i < N; i++) {
@@ -222,6 +282,8 @@ int main(int argc, char** argv) {
         BENCH(math_presum)
         BENCH(sleef_presum)
         BENCH(sleefredux_presum)
+
+        BENCH(sleefredux_presum_ss4)
 #undef BENCH
 
 #define BENCH(name) \
@@ -250,6 +312,8 @@ int main(int argc, char** argv) {
 
         BENCH(sleefredux_presum_tempdiv)
         /*BENCH(sleefredux_presum_tempmul)*/
+
+        BENCH(sleefredux_presum_ss4_tempdiv)
 
 #undef BENCH
 
