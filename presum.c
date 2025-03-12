@@ -39,21 +39,34 @@ void scan_inplace_ss(float* xs, size_t n) {
     __m128 sum = _mm_set1_epi32(0);
     __m128 a, b, c, d, sa, sb, sc;
     for (size_t i = 0; i < n/4; i += 4) {
-        a = m128_scan(v[i + 0]); // dcba cba ba a
+        a = m128_scan(_mm_add_ps(sum, v[i])); // dcba cba ba a
+
         b = m128_scan(v[i + 1]); // hgfe gfe fe f
         c = m128_scan(v[i + 2]); // lkji
         d = m128_scan(v[i + 3]); // ponm
-        sa = _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 3, 3, 3));
-        sb = _mm_shuffle_ps(b, b, _MM_SHUFFLE(3, 3, 3, 3));
-        sc = _mm_shuffle_ps(c, c, _MM_SHUFFLE(3, 3, 3, 3));
 
-        sa = _mm_add_ps(sa, sum);
-        sb = _mm_add_ps(sb, sa);
-        sc = _mm_add_ps(sc, sb);
+        // 5 adds, 3 shuffles
+        /*sa = _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 3, 3, 3));*/
+        /*sb = _mm_shuffle_ps(b, b, _MM_SHUFFLE(3, 3, 3, 3));*/
+        /*sc = _mm_shuffle_ps(c, c, _MM_SHUFFLE(3, 3, 3, 3));*/
+        /**/
+        /*sb = _mm_add_ps(sb, sa);*/
+        /*sc = _mm_add_ps(sc, sb);*/
+        /**/
+        /*b = _mm_add_ps(b, sa);*/
+        /*c = _mm_add_ps(c, sb);*/
+        /*d = _mm_add_ps(d, sc);*/
+
+        // 4 adds, 3 shuffles
+        sa = _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 3, 3, 3)); // sabcd
+        sc = _mm_shuffle_ps(c, c, _MM_SHUFFLE(3, 3, 3, 3)); // ijkl
 
         b = _mm_add_ps(b, sa);
-        c = _mm_add_ps(c, sb);
-        d = _mm_add_ps(d, sc);
+        d = _mm_add_ps(d, sc); // ijklmnop
+
+        sb = _mm_shuffle_ps(b, b, _MM_SHUFFLE(3, 3, 3, 3)); // sabcdefgh
+        c = _mm_add_ps(c, sb); // sabcdefghijkl
+        d = _mm_add_ps(d, sb);
 
         sum = _mm_shuffle_ps(d, d, _MM_SHUFFLE(3, 3, 3, 3));
 
