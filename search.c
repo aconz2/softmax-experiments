@@ -36,7 +36,7 @@ static u64 elapsed_ns(Timespec start, Timespec stop) {
 // so consumers need to clamp the max value at n-1 to be safe
 
 // this is based on the musl
-size_t float_binary_search_cdf(float* xs, size_t n, float v) {
+size_t binary_search_cdf(float* xs, size_t n, float v) {
     float* cur = xs;
     while (n > 0) {
         if (v <= cur[n/2]) {
@@ -50,7 +50,7 @@ size_t float_binary_search_cdf(float* xs, size_t n, float v) {
 }
 
 // based on https://en.algorithmica.org/hpc/data-structures/binary-search/
-size_t float_binary_search_alt_cdf(float* xs, size_t n, float v) {
+size_t binary_search_alt_cdf(float* xs, size_t n, float v) {
     size_t l = 0, r = n - 1;
     while (l < r) {
         size_t m = (l + r) / 2;
@@ -62,7 +62,7 @@ size_t float_binary_search_alt_cdf(float* xs, size_t n, float v) {
     return l;
 }
 
-size_t float_binary_search_alt_branchless_cdf(float* xs, size_t n, float v) {
+size_t binary_search_alt_branchless_cdf(float* xs, size_t n, float v) {
     float* cur = xs;
     size_t len = n;
     while (len > 1) {
@@ -73,26 +73,26 @@ size_t float_binary_search_alt_branchless_cdf(float* xs, size_t n, float v) {
     return cur - xs;
 }
 
-void float_binary_search2_easy_cdf(float* xs, size_t n, float v[2], size_t ret[2]) {
+void binary_search2_easy_cdf(float* xs, size_t n, float v[2], size_t ret[2]) {
     for (size_t i = 0; i < 2; i++) {
-        ret[i] = float_binary_search_cdf(xs, n, v[i]);
+        ret[i] = binary_search_cdf(xs, n, v[i]);
     }
 }
 
-void float_binary_search4_easy_cdf(float* xs, size_t n, float v[4], size_t ret[4]) {
+void binary_search4_easy_cdf(float* xs, size_t n, float v[4], size_t ret[4]) {
     for (size_t i = 0; i < 4; i++) {
-        ret[i] = float_binary_search_cdf(xs, n, v[i]);
+        ret[i] = binary_search_cdf(xs, n, v[i]);
     }
 }
 
-void float_binary_search8_easy_cdf(float* xs, size_t n, float v[8], size_t ret[8]) {
+void binary_search8_easy_cdf(float* xs, size_t n, float v[8], size_t ret[8]) {
     for (size_t i = 0; i < 8; i++) {
-        ret[i] = float_binary_search_cdf(xs, n, v[i]);
+        ret[i] = binary_search_cdf(xs, n, v[i]);
     }
 }
 
 // trying to do superscalar but this is looking uglier now
-void float_binary_search2_cdf(float* xs, size_t n, float vs[2], size_t ret[2]) {
+void binary_search2_cdf(float* xs, size_t n, float vs[2], size_t ret[2]) {
     float u = vs[0];
     float v = vs[1];
     float* ucur = xs;
@@ -119,7 +119,7 @@ void float_binary_search2_cdf(float* xs, size_t n, float vs[2], size_t ret[2]) {
 #undef INNER
 }
 
-void float_binary_search4_cdf(float* xs, size_t n, float vs[4], size_t ret[4]) {
+void binary_search4_cdf(float* xs, size_t n, float vs[4], size_t ret[4]) {
     float u = vs[0];
     float v = vs[1];
     float w = vs[2];
@@ -154,7 +154,7 @@ void float_binary_search4_cdf(float* xs, size_t n, float vs[4], size_t ret[4]) {
 #undef INNER
 }
 
-void float_binary_search8_cdf(float* xs, size_t N, float vs[8], size_t ret[8]) {
+void binary_search8_cdf(float* xs, size_t N, float vs[8], size_t ret[8]) {
     float* cur[8] = {xs, xs, xs, xs, xs, xs, xs, xs};
     size_t n[8] = {N, N, N, N, N, N, N, N};
 #define INNER(i) \
@@ -190,7 +190,7 @@ void float_binary_search8_cdf(float* xs, size_t N, float vs[8], size_t ret[8]) {
 #undef INNER
 }
 
-size_t float_linear_search_cdf(float* xs, size_t n, float v) {
+size_t linear_search_cdf(float* xs, size_t n, float v) {
     for (size_t i = 0; i < n; i++) {
         if (v <= xs[i]) {
             return i;
@@ -200,8 +200,8 @@ size_t float_linear_search_cdf(float* xs, size_t n, float v) {
 }
 
 // assumes no NaN
-size_t float_xmm_search_cdf(float* xs, size_t n, float needle) {
-    if (n < 16) return float_binary_search_cdf(xs, n, needle);
+size_t xmm_search_cdf(float* xs, size_t n, float needle) {
+    if (n < 16) return binary_search_cdf(xs, n, needle);
     __m128* v = (__m128*)__builtin_assume_aligned(xs, 16);
     __m128 needlev = _mm_set1_ps(needle);
     __m128 c;
@@ -223,8 +223,8 @@ size_t float_xmm_search_cdf(float* xs, size_t n, float needle) {
     return n;
 }
 
-size_t float_ymm_search_cdf(float* xs, size_t n, float needle) {
-    if (n < 16) return float_binary_search_cdf(xs, n, needle);
+size_t ymm_search_cdf(float* xs, size_t n, float needle) {
+    if (n < 16) return binary_search_cdf(xs, n, needle);
     __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
     __m256 needlev = _mm256_set1_ps(needle);
     __m256 c;
@@ -242,8 +242,8 @@ size_t float_ymm_search_cdf(float* xs, size_t n, float needle) {
     return n;
 }
 
-size_t float_ymm2_search_cdf(float* xs, size_t n, float needle) {
-    if (n < 16) return float_binary_search_cdf(xs, n, needle);
+size_t ymm2_search_cdf(float* xs, size_t n, float needle) {
+    if (n < 16) return binary_search_cdf(xs, n, needle);
     __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
     __m256 needlev = _mm256_set1_ps(needle);
     __m256 c1, c2;
@@ -267,29 +267,29 @@ size_t float_ymm2_search_cdf(float* xs, size_t n, float needle) {
     return n;
 }
 
-size_t float_ymm_search_cdf_256(float* xs, size_t N, float needle) {
+size_t ymm_search_cdf_256(float* xs, size_t N, float needle) {
     (void)N;
-    return float_ymm_search_cdf(xs, 256, needle);
+    return ymm_search_cdf(xs, 256, needle);
 }
 
-size_t float_ymm_search_cdf_128(float* xs, size_t N, float needle) {
+size_t ymm_search_cdf_128(float* xs, size_t N, float needle) {
     (void)N;
-    return float_ymm_search_cdf(xs, 128, needle);
+    return ymm_search_cdf(xs, 128, needle);
 }
 
 // THIS IS BUGGY
-size_t float_ymm_search_cdf_256_binary1(float* xs, size_t N, float needle) {
+size_t ymm_search_cdf_256_binary1(float* xs, size_t N, float needle) {
     (void)N;
     if (needle <= xs[128]) {
-        return float_ymm_search_cdf_128(xs, N, needle);
+        return ymm_search_cdf_128(xs, N, needle);
     } else {
-        return float_ymm_search_cdf_128(xs + 128, N, needle);
+        return ymm_search_cdf_128(xs + 128, N, needle);
     }
 }
 
 // these are buggy and a bit meh in initial perf so not trying further
 
-/*size_t float_binary_search_ymm_16_cdf(float* xs, size_t n, float v) {*/
+/*size_t binary_search_ymm_16_cdf(float* xs, size_t n, float v) {*/
 /*    float* cur = xs;*/
 /*    while (n > 32) {*/
 /*        if (v <= cur[n/2]) {*/
@@ -299,11 +299,11 @@ size_t float_ymm_search_cdf_256_binary1(float* xs, size_t N, float needle) {
 /*            n -= n/2 + 1;*/
 /*        }*/
 /*    }*/
-/*    size_t offset = float_ymm_search_cdf(cur, 16, v);*/
+/*    size_t offset = ymm_search_cdf(cur, 16, v);*/
 /*    return cur - xs + offset;*/
 /*}*/
 
-/*size_t float_binary_search_xmm_16_cdf(float* xs, size_t n, float v) {*/
+/*size_t binary_search_xmm_16_cdf(float* xs, size_t n, float v) {*/
 /*    float* cur = xs;*/
 /*    while (n > 16) {*/
 /*        if (v <= cur[n/2]) {*/
@@ -313,7 +313,7 @@ size_t float_ymm_search_cdf_256_binary1(float* xs, size_t N, float needle) {
 /*            n -= n/2 + 1;*/
 /*        }*/
 /*    }*/
-/*    size_t offset = ((uintptr_t)cur & 0b1111) == 0 ? float_xmm_search_cdf(cur, 16, v) : float_linear_search_cdf(cur, 16, v);*/
+/*    size_t offset = ((uintptr_t)cur & 0b1111) == 0 ? xmm_search_cdf(cur, 16, v) : linear_search_cdf(cur, 16, v);*/
 /**/
 /*    return cur - xs + offset;*/
 /*}*/
@@ -371,16 +371,16 @@ int main(int argc, char** argv) {
                 assert(i == name(xs, N, xs[i] - 0.01)); \
                 assert(i+1 == name(xs, N, xs[i] + 0.01)); \
 
-                TEST(float_binary_search_cdf);
-                TEST(float_linear_search_cdf);
+                TEST(binary_search_cdf);
+                TEST(linear_search_cdf);
 
                 if (__builtin_popcount(N) == 1) {
-                    TEST(float_xmm_search_cdf);
-                    TEST(float_ymm_search_cdf);
-                    TEST(float_ymm2_search_cdf);
+                    TEST(xmm_search_cdf);
+                    TEST(ymm_search_cdf);
+                    TEST(ymm2_search_cdf);
                     if (N >= 16) {
-                        /*TEST(float_binary_search_ymm_16_cdf);*/
-                        /*TEST(float_binary_search_xmm_16_cdf);*/
+                        /*TEST(binary_search_ymm_16_cdf);*/
+                        /*TEST(binary_search_xmm_16_cdf);*/
                     }
                 }
 
@@ -390,19 +390,19 @@ int main(int argc, char** argv) {
                     float v[2];
                     v[0] = xs[i];
                     v[1] = xs[i] - 0.01;
-                    float_binary_search2_cdf(xs, N, v, ret);
+                    binary_search2_cdf(xs, N, v, ret);
                     assert(i == ret[0]);
                     assert(i == ret[1]);
                     v[0] = xs[i];
                     v[1] = xs[N-i-1];
-                    float_binary_search2_cdf(xs, N, v, ret);
+                    binary_search2_cdf(xs, N, v, ret);
                     /*printf("i=%ld N-i-1=%ld xs[i]=%.2f xs[N-i-1]=%.2f ret is %ld %ld\n", i, N-i, xs[i], xs[N-i-1], ret[0], ret[1]);*/
                     assert(i == ret[0]);
                     assert(N-i-1 == ret[1]);
                     v[0] = xs[i] + 0.01;
                     v[1] = xs[N-i-1] + 0.01;
                     /*printf("searching %.2f %.2f\n", v[0], v[1]);*/
-                    float_binary_search2_cdf(xs, N, v, ret);
+                    binary_search2_cdf(xs, N, v, ret);
                     /*printf("got %ld %ld expected %ld %ld\n", ret[0], ret[1], i+1, N-1);*/
                     /*printf("i=%ld %.2f ret is %ld %ld\n", i, xs[i] + 0.01, ret[0], ret[1]);*/
                     assert(i+1 == ret[0]);
@@ -471,37 +471,37 @@ int main(int argc, char** argv) {
         printf("  %30s %.2f ns/call %.2f ms check=%lx\n", STRINGIFY(name), (double)elapsed_ns(start, stop) / (double)rounds, (double)elapsed_ns(start, stop) / 1000000, check);
 
         if (N == 8) {
-            BENCH(float_linear_search_cdf);
-            BENCH(float_binary_search_cdf);
-            BENCH(float_xmm_search_cdf);
-            BENCH(float_ymm_search_cdf);
+            BENCH(linear_search_cdf);
+            BENCH(binary_search_cdf);
+            BENCH(xmm_search_cdf);
+            BENCH(ymm_search_cdf);
             continue;
         }
-        BENCH(float_linear_search_cdf);
-        BENCH(float_binary_search_cdf);
-        BENCH(float_binary_search_alt_cdf);
-        BENCH(float_binary_search_alt_branchless_cdf);
-        BENCH(float_xmm_search_cdf);
-        BENCH(float_ymm_search_cdf);
-        BENCH(float_ymm2_search_cdf);
-        /*BENCH(float_binary_search_ymm_16_cdf);*/
-        /*BENCH(float_binary_search_xmm_16_cdf);*/
+        BENCH(linear_search_cdf);
+        BENCH(binary_search_cdf);
+        BENCH(binary_search_alt_cdf);
+        BENCH(binary_search_alt_branchless_cdf);
+        BENCH(xmm_search_cdf);
+        BENCH(ymm_search_cdf);
+        BENCH(ymm2_search_cdf);
+        /*BENCH(binary_search_ymm_16_cdf);*/
+        /*BENCH(binary_search_xmm_16_cdf);*/
 
-        BENCHK(2, float_binary_search2_cdf);
-        BENCHK(2, float_binary_search2_easy_cdf);
+        BENCHK(2, binary_search2_cdf);
+        BENCHK(2, binary_search2_easy_cdf);
 
-        BENCHK(4, float_binary_search4_easy_cdf);
-        BENCHK(4, float_binary_search4_cdf);
+        BENCHK(4, binary_search4_easy_cdf);
+        BENCHK(4, binary_search4_cdf);
 
-        BENCHK(8, float_binary_search8_easy_cdf);
-        BENCHK(8, float_binary_search8_cdf);
+        BENCHK(8, binary_search8_easy_cdf);
+        BENCHK(8, binary_search8_cdf);
 
         if (N == 128) {
-            BENCH(float_ymm_search_cdf_128);
+            BENCH(ymm_search_cdf_128);
         }
         if (N == 256) {
-            BENCH(float_ymm_search_cdf_256);
-            /*BENCH(float_ymm_search_cdf_256_binary1);*/
+            BENCH(ymm_search_cdf_256);
+            /*BENCH(ymm_search_cdf_256_binary1);*/
         }
 
 #undef BENCH
