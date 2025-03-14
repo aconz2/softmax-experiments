@@ -28,6 +28,7 @@ static u64 elapsed_ns(Timespec start, Timespec stop) {
 }
 
 #define INLINE __attribute__((always_inline))
+#define NOINLINE __attribute__((noinline))
 
 // NOTE: in general, these return in the range [0, n] inclusive
 // when searching a cdf, we expect v to be [0, 1) and xs[n-1] to be 1.0
@@ -36,7 +37,7 @@ static u64 elapsed_ns(Timespec start, Timespec stop) {
 // so consumers need to clamp the max value at n-1 to be safe
 
 // this is based on the musl
-size_t binary_search(float* xs, size_t n, float v) {
+size_t binary_search_(float* xs, size_t n, float v) {
     float* cur = xs;
     while (n > 0) {
         if (v <= cur[n/2]) {
@@ -47,6 +48,10 @@ size_t binary_search(float* xs, size_t n, float v) {
         }
     }
     return cur - xs;
+}
+
+size_t NOINLINE binary_search(float* xs, size_t n, float v) {
+    return binary_search_(xs, n, v);
 }
 
 // based on https://en.algorithmica.org/hpc/data-structures/binary-search/
@@ -89,26 +94,26 @@ size_t binary_search_alt_branchless_pftch(float* xs, size_t n, float v) {
 }
 
 
-void binary_search2_easy(float* xs, size_t n, float v[2], size_t ret[2]) {
+void NOINLINE binary_search2_easy(float* xs, size_t n, float v[2], size_t ret[2]) {
     for (size_t i = 0; i < 2; i++) {
         ret[i] = binary_search(xs, n, v[i]);
     }
 }
 
-void binary_search4_easy(float* xs, size_t n, float v[4], size_t ret[4]) {
+void NOINLINE binary_search4_easy(float* xs, size_t n, float v[4], size_t ret[4]) {
     for (size_t i = 0; i < 4; i++) {
         ret[i] = binary_search(xs, n, v[i]);
     }
 }
 
-void binary_search8_easy(float* xs, size_t n, float v[8], size_t ret[8]) {
+void NOINLINE binary_search8_easy(float* xs, size_t n, float v[8], size_t ret[8]) {
     for (size_t i = 0; i < 8; i++) {
         ret[i] = binary_search(xs, n, v[i]);
     }
 }
 
 // trying to do superscalar but this is looking uglier now
-void binary_search2(float* xs, size_t n, float vs[2], size_t ret[2]) {
+void NOINLINE binary_search2(float* xs, size_t n, float vs[2], size_t ret[2]) {
     float u = vs[0];
     float v = vs[1];
     float* ucur = xs;
@@ -135,7 +140,7 @@ void binary_search2(float* xs, size_t n, float vs[2], size_t ret[2]) {
 #undef INNER
 }
 
-void binary_search4(float* xs, size_t n, float vs[4], size_t ret[4]) {
+void NOINLINE binary_search4(float* xs, size_t n, float vs[4], size_t ret[4]) {
     float u = vs[0];
     float v = vs[1];
     float w = vs[2];
@@ -170,7 +175,7 @@ void binary_search4(float* xs, size_t n, float vs[4], size_t ret[4]) {
 #undef INNER
 }
 
-void binary_search8(float* xs, size_t N, float vs[8], size_t ret[8]) {
+void binary_search8_(float* xs, size_t N, float vs[8], size_t ret[8]) {
     float* cur[8] = {xs, xs, xs, xs, xs, xs, xs, xs};
     size_t n[8] = {N, N, N, N, N, N, N, N};
 #define INNER(i) \
@@ -206,7 +211,16 @@ void binary_search8(float* xs, size_t N, float vs[8], size_t ret[8]) {
 #undef INNER
 }
 
-size_t linear_search(float* xs, size_t n, float v) {
+void NOINLINE binary_search8(float* xs, size_t N, float vs[8], size_t ret[8]) {
+    binary_search8_(xs, N, vs, ret);
+}
+
+void NOINLINE binary_search8_256(float* xs, size_t N, float vs[8], size_t ret[8]) {
+    (void)N;
+    binary_search8_(xs, 256, vs, ret);
+}
+
+size_t NOINLINE linear_search(float* xs, size_t n, float v) {
     for (size_t i = 0; i < n; i++) {
         if (v <= xs[i]) {
             return i;
@@ -216,7 +230,7 @@ size_t linear_search(float* xs, size_t n, float v) {
 }
 
 // assumes no NaN
-size_t xmm_search(float* xs, size_t n, float needle) {
+size_t NOINLINE xmm_search(float* xs, size_t n, float needle) {
     if (n < 16) return binary_search(xs, n, needle);
     __m128* v = (__m128*)__builtin_assume_aligned(xs, 16);
     __m128 needlev = _mm_set1_ps(needle);
@@ -239,7 +253,7 @@ size_t xmm_search(float* xs, size_t n, float needle) {
     return n;
 }
 
-size_t ymm_search(float* xs, size_t n, float needle) {
+size_t ymm_search_(float* xs, size_t n, float needle) {
     if (n < 16) return binary_search(xs, n, needle);
     __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
     __m256 needlev = _mm256_set1_ps(needle);
@@ -258,7 +272,11 @@ size_t ymm_search(float* xs, size_t n, float needle) {
     return n;
 }
 
-size_t ymm2_search(float* xs, size_t n, float needle) {
+size_t NOINLINE ymm_search(float* xs, size_t n, float needle) {
+    return ymm_search_(xs, n, needle);
+}
+
+size_t NOINLINE ymm2_search(float* xs, size_t n, float needle) {
     if (n < 16) return binary_search(xs, n, needle);
     __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
     __m256 needlev = _mm256_set1_ps(needle);
@@ -519,6 +537,7 @@ int main(int argc, char** argv) {
         }
         if (N == 256) {
             BENCH(ymm_search_256);
+            BENCHK(8, binary_search8_256);
             /*BENCH(ymm_search_256_binary1);*/
         }
 
