@@ -6,3 +6,5 @@ symbols=softmax_sleefredux_presum_ss4_tempdiv
 llvm-objdump --disassembler-color=terminal --x86-asm-syntax=intel --symbolize-operands --disassemble-symbols=$symbols softmax
 
 llvm-objdump --disassembler-color=terminal --x86-asm-syntax=intel --symbolize-operands --disassemble-symbols=scan_inplace_ss4 presum
+
+llvm-objdump --disassembler-color=terminal --x86-asm-syntax=intel --symbolize-operands --disassemble-symbols=binary_search,binary_search8 search
