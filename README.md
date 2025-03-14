@@ -48,25 +48,28 @@ N=256
 
 The `scan_inplace_ss4` is copy pasted into softmax.c so it can do the temperature division all in one
 
-[search.c](./search.c) has way too many variations of searching a sorted array, as if you were sampling from a cdf. fastest is `binary_search8` which is superscalar until the first element is found. There might be a bit of unfairness if the rng is faster because it gets called in batch, but everything is inlined so I think it's okay?
+[search.c](./search.c) has way too many variations of searching a sorted array, as if you were sampling from a cdf. fastest is `binary_search8` which is superscalar until the first element is found. There might be a bit of unfairness if the rng is faster because it gets called in batch, but idk. I tried higher number past 8 and it falls off.
 
 ```
-RNG  0.81 ns/call 8.10 ms check=edcb38d7
+RNG  0.77 ns/call 7.65 ms check=edcb38d7
 N=256
-                   linear_search 44.57 ns/call 356.59 ms check=3ccd98b7
-                   binary_search 8.44 ns/call 67.50 ms check=3ccd98b7
-               binary_search_alt 32.11 ns/call 256.86 ms check=3ccd98af
-    binary_search_alt_branchless 29.68 ns/call 237.44 ms check=3ccd98af
-  binary_search_alt_branchless_pftch 30.73 ns/call 245.85 ms check=3ccd98af
-                      xmm_search 16.64 ns/call 133.13 ms check=3ccd98b7
-                      ymm_search 12.77 ns/call 102.13 ms check=3ccd98b7
-                     ymm2_search 12.76 ns/call 102.09 ms check=3ccd98b7
-                  binary_search2 6.95 ns/call 55.61 ms check=3ccd98b7
-             binary_search2_easy 8.32 ns/call 66.60 ms check=3ccd98b7
-             binary_search4_easy 8.24 ns/call 65.93 ms check=3ccd98b7
-                  binary_search4 6.78 ns/call 54.22 ms check=3ccd98b7
-             binary_search8_easy 9.06 ns/call 72.49 ms check=3ccd98b7
-                  binary_search8 5.41 ns/call 43.24 ms check=3ccd98b7
+                   linear_search 35.80 ns/call 128.88 ms check=1b603b46
+                   binary_search 9.11 ns/call 32.81 ms check=1b603b46
+                      xmm_search 19.39 ns/call 69.82 ms check=1b603b46
+                      ymm_search 14.09 ns/call 50.71 ms check=1b603b46
+                     ymm2_search 13.92 ns/call 50.10 ms check=1b603b46
+                  binary_search2 8.70 ns/call 31.33 ms check=1b603b46
+             binary_search2_easy 10.32 ns/call 37.16 ms check=1b603b46
+             binary_search4_easy 9.77 ns/call 35.16 ms check=1b603b46
+                  binary_search4 6.60 ns/call 23.75 ms check=1b603b46
+             binary_search8_easy 9.43 ns/call 33.95 ms check=1b603b46
+                  binary_search8 5.50 ns/call 19.79 ms check=1b603b46
+                  binary_search9 5.44 ns/call 19.59 ms check=1b603b46
+                 binary_search10 5.99 ns/call 21.56 ms check=1b603b46
+                 binary_search12 5.95 ns/call 21.41 ms check=1b603b46
+                 binary_search16 6.69 ns/call 24.07 ms check=1b603b46
+                  ymm_search_256 14.32 ns/call 51.57 ms check=1b603b46
+              binary_search8_256 5.49 ns/call 19.77 ms check=1b603b46
 ```
 
 ```

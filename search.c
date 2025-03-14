@@ -175,7 +175,7 @@ void NOINLINE binary_search4(float* xs, size_t n, float vs[4], size_t ret[4]) {
 #undef INNER
 }
 
-void binary_search8_(float* xs, size_t N, float vs[8], size_t ret[8]) {
+void INLINE binary_search8_(float* xs, size_t N, float vs[8], size_t ret[8]) {
     float* cur[8] = {xs, xs, xs, xs, xs, xs, xs, xs};
     size_t n[8] = {N, N, N, N, N, N, N, N};
 #define INNER(i) \
@@ -218,6 +218,189 @@ void NOINLINE binary_search8(float* xs, size_t N, float vs[8], size_t ret[8]) {
 void NOINLINE binary_search8_256(float* xs, size_t N, float vs[8], size_t ret[8]) {
     (void)N;
     binary_search8_(xs, 256, vs, ret);
+}
+
+void binary_search9(float* xs, size_t N, float vs[9], size_t ret[9]) {
+    float* cur[9] = {xs, xs, xs, xs, xs, xs, xs, xs, xs};
+    size_t n[9] = {N, N, N, N, N, N, N, N, N};
+#define INNER(i) \
+    if (vs[i] <= cur[i][n[i]/2]) { \
+        n[i] /= 2; \
+    } else { \
+        cur[i] = &cur[i][n[i]/2 + 1]; \
+        n[i] -= n[i]/2 + 1; \
+    }
+
+    while (n[0] > 0 && n[1] > 0 && n[2] > 0 && n[3] > 0 &&
+            n[4] > 0 && n[5] > 0 && n[6] > 0 && n[7] > 0 &&
+            n[8] > 0
+            ) {
+        INNER(0)
+        INNER(1)
+        INNER(2)
+        INNER(3)
+        INNER(4)
+        INNER(5)
+        INNER(6)
+        INNER(7)
+        INNER(8)
+    }
+    while (n[0] > 0) { INNER(0) }
+    while (n[1] > 0) { INNER(1) }
+    while (n[2] > 0) { INNER(2) }
+    while (n[3] > 0) { INNER(3) }
+    while (n[4] > 0) { INNER(4) }
+    while (n[5] > 0) { INNER(5) }
+    while (n[6] > 0) { INNER(6) }
+    while (n[7] > 0) { INNER(7) }
+    while (n[8] > 0) { INNER(8) }
+    for (int i = 0; i < 9; i++) {
+        ret[i] = cur[i] - xs;
+    }
+#undef INNER
+}
+
+void binary_search10(float* xs, size_t N, float vs[10], size_t ret[10]) {
+    float* cur[10] = {xs, xs, xs, xs, xs, xs, xs, xs, xs, xs};
+    size_t n[10] = {N, N, N, N, N, N, N, N, N, N};
+#define INNER(i) \
+    if (vs[i] <= cur[i][n[i]/2]) { \
+        n[i] /= 2; \
+    } else { \
+        cur[i] = &cur[i][n[i]/2 + 1]; \
+        n[i] -= n[i]/2 + 1; \
+    }
+
+    while (n[0] > 0 && n[1] > 0 && n[2] > 0 && n[3] > 0 &&
+            n[4] > 0 && n[5] > 0 && n[6] > 0 && n[7] > 0 &&
+            n[8] > 0 && n[9] > 0
+            ) {
+        INNER(0)
+        INNER(1)
+        INNER(2)
+        INNER(3)
+        INNER(4)
+        INNER(5)
+        INNER(6)
+        INNER(7)
+        INNER(8)
+        INNER(9)
+    }
+    while (n[0] > 0) { INNER(0) }
+    while (n[1] > 0) { INNER(1) }
+    while (n[2] > 0) { INNER(2) }
+    while (n[3] > 0) { INNER(3) }
+    while (n[4] > 0) { INNER(4) }
+    while (n[5] > 0) { INNER(5) }
+    while (n[6] > 0) { INNER(6) }
+    while (n[7] > 0) { INNER(7) }
+    while (n[8] > 0) { INNER(8) }
+    while (n[9] > 0) { INNER(9) }
+    for (int i = 0; i < 10; i++) {
+        ret[i] = cur[i] - xs;
+    }
+#undef INNER
+}
+
+void binary_search12(float* xs, size_t N, float vs[12], size_t ret[12]) {
+    float* cur[12] = {xs, xs, xs, xs, xs, xs, xs, xs, xs, xs, xs, xs};
+    size_t n[12] = {N, N, N, N, N, N, N, N, N, N, N, N};
+#define INNER(i) \
+    if (vs[i] <= cur[i][n[i]/2]) { \
+        n[i] /= 2; \
+    } else { \
+        cur[i] = &cur[i][n[i]/2 + 1]; \
+        n[i] -= n[i]/2 + 1; \
+    }
+
+    while (n[0] > 0 && n[1] > 0 && n[2] > 0 && n[3] > 0 &&
+            n[4] > 0 && n[5] > 0 && n[6] > 0 && n[7] > 0 &&
+            n[8] > 0 && n[9] > 0 && n[10] > 0 && n[11] > 0
+            ) {
+        INNER(0)
+        INNER(1)
+        INNER(2)
+        INNER(3)
+        INNER(4)
+        INNER(5)
+        INNER(6)
+        INNER(7)
+        INNER(8)
+        INNER(9)
+        INNER(10)
+        INNER(11)
+    }
+    while (n[0] > 0) { INNER(0) }
+    while (n[1] > 0) { INNER(1) }
+    while (n[2] > 0) { INNER(2) }
+    while (n[3] > 0) { INNER(3) }
+    while (n[4] > 0) { INNER(4) }
+    while (n[5] > 0) { INNER(5) }
+    while (n[6] > 0) { INNER(6) }
+    while (n[7] > 0) { INNER(7) }
+    while (n[8] > 0) { INNER(8) }
+    while (n[9] > 0) { INNER(9) }
+    while (n[10] > 0) { INNER(10) }
+    while (n[11] > 0) { INNER(11) }
+    for (int i = 0; i < 12; i++) {
+        ret[i] = cur[i] - xs;
+    }
+#undef INNER
+}
+
+void binary_search16(float* xs, size_t N, float vs[16], size_t ret[16]) {
+    float* cur[16] = {xs, xs, xs, xs, xs, xs, xs, xs, xs, xs, xs, xs, xs, xs, xs, xs};
+    size_t n[16] = {N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N};
+#define INNER(i) \
+    if (vs[i] <= cur[i][n[i]/2]) { \
+        n[i] /= 2; \
+    } else { \
+        cur[i] = &cur[i][n[i]/2 + 1]; \
+        n[i] -= n[i]/2 + 1; \
+    }
+
+    while (n[0] > 0 && n[1] > 0 && n[2] > 0 && n[3] > 0 &&
+            n[4] > 0 && n[5] > 0 && n[6] > 0 && n[7] > 0 &&
+            n[8] > 0 && n[9] > 0 && n[10] > 0 && n[11] > 0 &&
+            n[12] > 0 && n[13] > 0 && n[14] > 0 && n[15] > 0
+            ) {
+        INNER(0)
+        INNER(1)
+        INNER(2)
+        INNER(3)
+        INNER(4)
+        INNER(5)
+        INNER(6)
+        INNER(7)
+        INNER(8)
+        INNER(9)
+        INNER(10)
+        INNER(11)
+        INNER(12)
+        INNER(13)
+        INNER(14)
+        INNER(15)
+    }
+    while (n[0] > 0) { INNER(0) }
+    while (n[1] > 0) { INNER(1) }
+    while (n[2] > 0) { INNER(2) }
+    while (n[3] > 0) { INNER(3) }
+    while (n[4] > 0) { INNER(4) }
+    while (n[5] > 0) { INNER(5) }
+    while (n[6] > 0) { INNER(6) }
+    while (n[7] > 0) { INNER(7) }
+    while (n[8] > 0) { INNER(8) }
+    while (n[9] > 0) { INNER(9) }
+    while (n[10] > 0) { INNER(10) }
+    while (n[11] > 0) { INNER(11) }
+    while (n[12] > 0) { INNER(12) }
+    while (n[13] > 0) { INNER(13) }
+    while (n[14] > 0) { INNER(14) }
+    while (n[15] > 0) { INNER(15) }
+    for (int i = 0; i < 16; i++) {
+        ret[i] = cur[i] - xs;
+    }
+#undef INNER
 }
 
 size_t NOINLINE linear_search(float* xs, size_t n, float v) {
@@ -466,10 +649,10 @@ int main(int argc, char** argv) {
         printf("RNG  %.2f ns/call %.2f ms check=%x\n", (double)elapsed_ns(start, stop) / (double)rounds, (double)elapsed_ns(start, stop) / 1000000, check);
     }
 
-    size_t rounds = 8000000;
-    if (rounds % 8 != 0) { // must be true so BENCHK is correct
-        return 1;
-    }
+    size_t rounds = 3600000;
+    /*if (rounds % 12 != 0) { // must be true so BENCHK is correct*/
+    /*    return 1;*/
+    /*}*/
     size_t check;
 
     for (size_t N = 8; N <= 512; N *= 2) {
@@ -491,6 +674,7 @@ int main(int argc, char** argv) {
         printf("  %30s %.2f ns/call %.2f ms check=%lx\n", STRINGIFY(name), (double)elapsed_ns(start, stop) / (double)rounds, (double)elapsed_ns(start, stop) / 1000000, check);
 
 #define BENCHK(K, name) \
+        if (rounds % K != 0) { printf("rounds must be mod %d\n", K); return 1; } \
         rng_init(&rng, 42); \
         check = 0; \
         clock_ns(&start); \
@@ -531,6 +715,11 @@ int main(int argc, char** argv) {
 
         BENCHK(8, binary_search8_easy);
         BENCHK(8, binary_search8);
+
+        BENCHK(9, binary_search9);
+        BENCHK(10, binary_search10);
+        BENCHK(12, binary_search12);
+        BENCHK(16, binary_search16);
 
         if (N == 128) {
             BENCH(ymm_search_128);
