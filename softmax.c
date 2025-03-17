@@ -10,22 +10,24 @@
 #include "sleefredux.h"
 
 #define STRINGIFY(x) #x
+#define INLINE __attribute__((always_inline))
+#define BILLION  1000000000LL
 
 typedef struct timespec Timespec;
+typedef uint64_t u64;
 
-#define BILLION  1000000000LL
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
 
 static void clock_ns(Timespec* t) {
   clock_gettime(CLOCK_MONOTONIC, t);
 }
 
-typedef uint64_t u64;
-
 static u64 elapsed_ns(Timespec start, Timespec stop) {
   return (u64)(stop.tv_sec - start.tv_sec) * BILLION + (u64)(stop.tv_nsec - start.tv_nsec);
 }
 
-#define INLINE __attribute__((always_inline))
+#pragma clang diagnostic pop
 
 // following two functions pulled from presum.c
 static __m128 INLINE m128_scan(__m128 x) {
@@ -254,6 +256,9 @@ int main(int argc, char** argv) {
 
     printf("init=%.2f temp=%.2f\n", v, temp);
 
+#ifdef RUNTEST
+#else
+
     Timespec start, stop;
 
     size_t rounds = 1000000;
@@ -319,4 +324,6 @@ int main(int argc, char** argv) {
 
         free(xs);
     }
+
+#endif
 }

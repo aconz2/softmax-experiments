@@ -10,25 +10,27 @@
 #include "random.h"
 
 #define STRINGIFY(x) #x
+#define BILLION  1000000000LL
+#define INLINE __attribute__((always_inline))
+#define NOINLINE __attribute__((noinline))
 
 typedef struct timespec Timespec;
+typedef uint64_t u64;
+typedef uint32_t u32;
+typedef uint8_t u8;
 
-#define BILLION  1000000000LL
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
 
 static void clock_ns(Timespec* t) {
   clock_gettime(CLOCK_MONOTONIC, t);
 }
 
-typedef uint64_t u64;
-typedef uint32_t u32;
-typedef uint8_t u8;
-
 static u64 elapsed_ns(Timespec start, Timespec stop) {
   return (u64)(stop.tv_sec - start.tv_sec) * BILLION + (u64)(stop.tv_nsec - start.tv_nsec);
 }
 
-#define INLINE __attribute__((always_inline))
-#define NOINLINE __attribute__((noinline))
+#pragma clang diagnostic pop
 
 // NOTE: in general, these return in the range [0, n] inclusive
 // when searching a cdf, we expect v to be [0, 1) and xs[n-1] to be 1.0
@@ -558,7 +560,7 @@ void dump_array(float* xs, size_t N) {
     printf("\n");
 }
 
-static void init(float* xs, size_t N, float v) {
+static void init_cdf(float* xs, size_t N, float v) {
     float sum = 0;
     for (size_t i = 0; i < N; i++) { xs[i] = v; }
     for (size_t i = 0; i < N; i++) { sum += xs[i]; }
@@ -575,11 +577,12 @@ int main(int argc, char** argv) {
     if (argc >= 2) { sscanf(argv[1], "%f", &v); }
 
     printf("init=%.2f\n", v);
+#ifdef RUNTEST
 
     {
         for (size_t N = 8; N < 32; N++) {
             float* xs = aligned_alloc(32, round_up_size_t(sizeof(float)*N, 32));
-            init(xs, N, 0.1);
+            init_cdf(xs, N, 0.1);
             /*dump_array(xs, N);*/
 
             for (size_t i = 0; i < N; i++) {
@@ -631,6 +634,8 @@ int main(int argc, char** argv) {
         }
     }
 
+#else
+
     Timespec start, stop;
 
     {
@@ -657,7 +662,7 @@ int main(int argc, char** argv) {
 
     for (size_t N = 8; N <= 512; N *= 2) {
         float* xs = aligned_alloc(32, sizeof(float)*N);
-        init(xs, N, 0.1);
+        init_cdf(xs, N, 0.1);
 
         PRNG32RomuQuad rng;
 
@@ -735,5 +740,7 @@ int main(int argc, char** argv) {
 
         free(xs);
     }
+
+#endif
 
 }
