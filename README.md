@@ -25,6 +25,8 @@ N=256
       scan_inplace_ss4 0.39 ns/el 392.78 ms
 ```
 
+Have since updated with some versions that handle unaligned to 16 byte addresses and lengths which are not multiples of 4, 8, or 16. I played with a few ways to handle the head and tail and like `scan_unaligned2` the best; most of them seem fairly the same in perf but the generated code is pretty nice for that one.
+
 [softmax.c](./softmax.c) has quite a few variations that use 1) libm expf, sleef, or sleefredux; 2) prefix sum, prefix sum superscalar 4, or no prefix sum (`sum` means regular softmax, `presum` is a cdf) 3) temperature scaling (`tempdiv`) or not. There is another temperature variation testing mul by inverse or div but the compiler does that for us anyways so I commented it out.
 
 ```
