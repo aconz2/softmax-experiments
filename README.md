@@ -78,3 +78,5 @@ N=256
 ./run.sh
 ./dis.sh
 ```
+
+Tested these with isolcpus=30-31 and didn't see much difference at a glance. I wish I knew how to use cgroupv2 cpuset isolation to make that easier.
