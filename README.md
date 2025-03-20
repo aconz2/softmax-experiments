@@ -33,27 +33,34 @@ Interestingly, the running sum version (one pass for exp and sum, one pass for d
 
 Added the scalar implementation of expf from sleef; just writing plain loops vectorizes quite well and it would handle unaligned and non mod8 sized vectors easily. Still not as fast as the avx2, it is still vbroadcastss in the loop and uses slightly different strategy for the conditional handling which loads an op from memory.
 
+Interestingly, sleef uses the range check < -104 > 104 in the scalar version for 0 and inf, but < -104 > 100 in the sse2/avx2 version; though values seem to go to those before anyhow: 88.722839 and -103.972084. I know there's a ton I don't understand about floats (and I've been testing with ffast-math) so maybe those checks make it play nice there. But it makes me think if you know you're going to clip your values in the input, you can get rid of those. Yeah things are slower without ffast-math.
+
+Added an nzni for nonzero nonifinity that removes the range check in the avx2 version so we promise to pass it floats in the rough range -100 to 88. It does reduce register count because two less constants.
+
 ```
 (all these names have the `softmax_` prefix removed)
 N=256
-                        math_sum 2.24 ns/el 573.21 ms
-                       sleef_sum 0.50 ns/el 127.07 ms
-           sleefredux_scalar_sum 0.39 ns/el 100.79 ms
-   sleefredux_scalar_running_sum 0.38 ns/el 96.45 ms
-             sleefredux_sse2_sum 0.62 ns/el 159.96 ms
-             sleefredux_avx2_sum 0.33 ns/el 83.39 ms
-     sleefredux_avx2_running_sum 0.33 ns/el 84.72 ms
-                     math_presum 2.95 ns/el 756.26 ms
-                    sleef_presum 1.25 ns/el 320.28 ms
-          sleefredux_avx2_presum 1.08 ns/el 276.39 ms
-      sleefredux_avx2_presum_ss4 0.58 ns/el 147.88 ms
-                math_sum_tempdiv 2.23 ns/el 570.45 ms
-               sleef_sum_tempdiv 0.54 ns/el 137.31 ms
-     sleefredux_avx2_sum_tempdiv 0.37 ns/el 94.21 ms
-             math_presum_tempdiv 2.99 ns/el 765.92 ms
-            sleef_presum_tempdiv 1.27 ns/el 325.96 ms
-  sleefredux_avx2_presum_tempdiv 1.12 ns/el 286.01 ms
-  sleefredux_avx2_presum_ss4_tempdiv 0.61 ns/el 156.02 ms
+                        math_sum 2.35 ns/el 601.85 ms
+                       sleef_sum 0.53 ns/el 134.84 ms
+           sleefredux_scalar_sum 0.42 ns/el 107.66 ms
+   sleefredux_scalar_running_sum 0.40 ns/el 102.70 ms
+             sleefredux_sse2_sum 0.67 ns/el 170.68 ms
+             sleefredux_avx2_sum 0.35 ns/el 88.54 ms
+     sleefredux_avx2_running_sum 0.36 ns/el 91.60 ms
+        sleefredux_avx2_nzni_sum 0.32 ns/el 82.25 ms
+  sleefredux_avx2_nzni_running_sum 0.32 ns/el 82.27 ms
+                     math_presum 3.15 ns/el 805.68 ms
+                    sleef_presum 1.33 ns/el 339.31 ms
+          sleefredux_avx2_presum 1.14 ns/el 292.24 ms
+      sleefredux_avx2_presum_ss4 0.62 ns/el 157.90 ms
+        sleefredux_scalar_sum256 0.42 ns/el 107.54 ms
+                math_sum_tempdiv 2.37 ns/el 605.51 ms
+               sleef_sum_tempdiv 0.57 ns/el 146.41 ms
+     sleefredux_avx2_sum_tempdiv 0.39 ns/el 100.31 ms
+             math_presum_tempdiv 3.16 ns/el 808.14 ms
+            sleef_presum_tempdiv 1.35 ns/el 345.13 ms
+  sleefredux_avx2_presum_tempdiv 1.18 ns/el 301.10 ms
+  sleefredux_avx2_presum_ss4_tempdiv 0.65 ns/el 166.84 ms
 ```
 
 The `scan_inplace_ss4` is copy pasted into softmax.c so it can do the temperature division all in one
@@ -89,4 +96,13 @@ N=256
 
 Tested these with isolcpus=30-31 and didn't see much difference at a glance. I wish I knew how to use cgroupv2 cpuset isolation to make that easier.
 
-Interestingly, sleef uses the range check < -104 > 104 in the scalar version for 0 and inf, but < -104 > 100 in the sse2/avx2 version; though values seem to go to those before anyhow: 88.722839 and -103.972084. I know there's a ton I don't understand about floats (and I've been testing with ffast-math) so maybe those checks make it play nice there. But it makes me think if you know you're going to clip your values in the input, you can get rid of those.
+
+Oh I see now you can build sleef with inline headers:
+
+```
+mkdir -p build install
+cd sleef
+cmake -DSLEEF_BUILD_INLINE_HEADERS=TRUE -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=install/ -S . -B build
+cmake --build build -j --clean-first
+cmake --install build
+```

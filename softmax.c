@@ -162,6 +162,18 @@ static void INLINE do_exp(float* restrict src, float* restrict dst, size_t N, in
         } else if (tempkind == 2) {
             for (size_t i = 0; i < N/4; i++) { dstv[i] = Sleef_redux_finz_expf4_u10sse2(_mm_mul_ps(srcv[i], tempinvv)); }
         }
+    } else if (kind == 4) {
+        __m256 tempv = _mm256_set1_ps(temp);
+        __m256 tempinvv = _mm256_set1_ps(1 / temp);
+        __m256* restrict srcv = __builtin_assume_aligned(src, 32);
+        __m256* restrict dstv = __builtin_assume_aligned(dst, 32);
+        if (tempkind == 0) {
+            for (size_t i = 0; i < N/8; i++) { dstv[i] = Sleef_redux_expf8_u10avx2(srcv[i]); }
+        } else if (tempkind == 1) {
+            for (size_t i = 0; i < N/8; i++) { dstv[i] = Sleef_redux_expf8_u10avx2(_mm256_div_ps(srcv[i], tempv)); }
+        } else if (tempkind == 2) {
+            for (size_t i = 0; i < N/8; i++) { dstv[i] = Sleef_redux_expf8_u10avx2(_mm256_mul_ps(srcv[i], tempinvv)); }
+        }
     }
 }
 
@@ -192,6 +204,11 @@ void NOINLINE softmax_sleefredux_avx2_sum(float* restrict src, float* restrict d
     do_sum(dst, N, 0);
 }
 
+void NOINLINE softmax_sleefredux_avx2_nzni_sum(float* restrict src, float* restrict dst, size_t N) {
+    do_exp(src, dst, N, 4, 0, 0.0);
+    do_sum(dst, N, 0);
+}
+
 void NOINLINE softmax_sleefredux_sse2_sum(float* restrict src, float* restrict dst, size_t N) {
     do_exp(src, dst, N, 3, 0, 0.0);
     do_sum(dst, N, 0);
@@ -216,6 +233,29 @@ void NOINLINE softmax_sleefredux_avx2_running_sum(float* restrict src, float* re
 #pragma unroll 1
     for (size_t i = 0; i < N/8; i++) {
         x = Sleef_redux_finz_expf8_u10avx2(srcv[i]);
+        sum = _mm256_add_ps(sum, x);
+        dstv[i] = x;
+    }
+    // this generates (vmovaps vmulps){4} whereas the auto vectorizer generates vmulps{4} vmovaps{4}
+    sum = m256_hadd(sum);
+    for (size_t i = 0; i < N/8; i++) {
+        dstv[i] = _mm256_div_ps(dstv[i], sum);
+    }
+    /*float ssum = _mm256_cvtss_f32(sum);*/
+    /*for (size_t i = 0; i < N; i++) {*/
+    /*    dst[i] /= ssum;*/
+    /*}*/
+}
+
+void NOINLINE softmax_sleefredux_avx2_nzni_running_sum(float* restrict src, float* restrict dst, size_t N) {
+    __builtin_assume(N >= 8);
+    __m256* restrict srcv = __builtin_assume_aligned(src, 32);
+    __m256* restrict dstv = __builtin_assume_aligned(dst, 32);
+    __m256 sum = _mm256_set1_ps(0);
+    __m256 x;
+#pragma unroll 1
+    for (size_t i = 0; i < N/8; i++) {
+        x = Sleef_redux_expf8_u10avx2(srcv[i]);
         sum = _mm256_add_ps(sum, x);
         dstv[i] = x;
     }
@@ -421,6 +461,8 @@ int main(int argc, char** argv) {
         BENCH(sleefredux_sse2_sum)
         BENCH(sleefredux_avx2_sum)
         BENCH(sleefredux_avx2_running_sum)
+        BENCH(sleefredux_avx2_nzni_sum)
+        BENCH(sleefredux_avx2_nzni_running_sum)
 
         BENCH(math_presum)
         BENCH(sleef_presum)
