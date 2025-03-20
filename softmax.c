@@ -10,6 +10,7 @@
 #include "sleef.h"
 #include "sleefreduxavx2.h"
 #include "sleefreduxsse2.h"
+#include "sleefreduxscalar.h"
 
 #define STRINGIFY(x) #x
 #define INLINE __attribute__((always_inline))
@@ -229,6 +230,53 @@ void NOINLINE softmax_sleefredux_avx2_running_sum(float* restrict src, float* re
     /*}*/
 }
 
+void INLINE softmax_sleefredux_scalar_sum_(float* restrict src, float* restrict dst, size_t N) {
+    __builtin_assume(N >= 8);
+    src = __builtin_assume_aligned(src, 32);
+    dst = __builtin_assume_aligned(dst, 32);
+
+#pragma unroll 1
+    for (size_t i = 0; i < N; i++) {
+        dst[i] = Sleef_redux_finz_expf_u10scalar(src[i]);
+    }
+
+    float sum = 0;
+    for (size_t i = 0; i < N; i++) {
+        sum += dst[i];
+    }
+
+    for (size_t i = 0; i < N; i++) {
+        dst[i] /= sum;
+    }
+}
+
+void NOINLINE softmax_sleefredux_scalar_sum(float* restrict src, float* restrict dst, size_t N) {
+    return softmax_sleefredux_scalar_sum_(src, dst, N);
+}
+
+void NOINLINE softmax_sleefredux_scalar_sum256(float* restrict src, float* restrict dst, size_t N) {
+    (void)N;
+    return softmax_sleefredux_scalar_sum_(src, dst, 256);
+}
+
+void NOINLINE softmax_sleefredux_scalar_running_sum(float* restrict src, float* restrict dst, size_t N) {
+    __builtin_assume(N >= 8);
+    src = __builtin_assume_aligned(src, 32);
+    dst = __builtin_assume_aligned(dst, 32);
+
+    float sum = 0;
+    float x;
+    for (size_t i = 0; i < N; i++) {
+        x = Sleef_redux_finz_expf_u10scalar(src[i]);
+        dst[i] = x;
+        sum += x;
+    }
+
+    for (size_t i = 0; i < N; i++) {
+        dst[i] /= sum;
+    }
+}
+
 // -- tempdiv
 
 void NOINLINE softmax_math_sum_tempdiv(float* restrict src, float* restrict dst, size_t N, float temp) {
@@ -322,8 +370,8 @@ int main(int argc, char** argv) {
         SETUP(); *((__m256*)xs) = Sleef_finz_expf8_u10avx2(*((__m256*)xs)); dump_array(xs, N);
         SETUP(); *((__m256*)xs) = Sleef_redux_finz_expf8_u10avx2(*((__m256*)xs)); dump_array(xs, N);
         SETUP();
-        ((__m128*)xs)[0] = Sleef_redux_finz_expf4_u10avx2(((__m128*)xs)[0]);
-        ((__m128*)xs)[1] = Sleef_redux_finz_expf4_u10avx2(((__m128*)xs)[1]);
+        ((__m128*)xs)[0] = Sleef_redux_finz_expf4_u10sse2(((__m128*)xs)[0]);
+        ((__m128*)xs)[1] = Sleef_redux_finz_expf4_u10sse2(((__m128*)xs)[1]);
         dump_array(xs, N);
         SETUP(); for (size_t i = 0; i < N; i++) { xs[i] = expf(xs[i]); } dump_array(xs, N);
         //SETUP(); Sleef_finz_expf8_u10avx2((__m256*)xs); dump_array(xs, N);
@@ -368,6 +416,8 @@ int main(int argc, char** argv) {
 
         BENCH(math_sum)
         BENCH(sleef_sum)
+        BENCH(sleefredux_scalar_sum)
+        BENCH(sleefredux_scalar_running_sum)
         BENCH(sleefredux_sse2_sum)
         BENCH(sleefredux_avx2_sum)
         BENCH(sleefredux_avx2_running_sum)
@@ -376,8 +426,12 @@ int main(int argc, char** argv) {
         BENCH(sleef_presum)
         BENCH(sleefredux_avx2_presum)
 
-
         BENCH(sleefredux_avx2_presum_ss4)
+
+        if (N == 256) {
+            BENCH(sleefredux_scalar_sum256);
+        }
+
 #undef BENCH
 
 #define BENCH(name) \
