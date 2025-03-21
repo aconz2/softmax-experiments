@@ -415,12 +415,15 @@ void dump_array(float* xs, size_t N) {
     printf("\n");
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
 static void init_norm(float* xs, size_t N, float v) {
     float sum = 0;
     for (size_t i = 0; i < N; i++) { xs[i] = v; }
     for (size_t i = 0; i < N; i++) { sum += xs[i]; }
     for (size_t i = 0; i < N; i++) { xs[i] /= sum; }
 }
+#pragma clang diagnostic pop
 
 float total_diff(float* ref, float* xs, size_t N) {
     float sum = 0;

@@ -553,7 +553,7 @@ size_t NOINLINE ymm_search_32_gt_or(float* xs, size_t n, float needle) {
     return popcount32(ret);
 }
 
-size_t NOINLINE ymm_search_32_gt_or_tree(float* xs, size_t n, float needle) {
+size_t ymm_search_32_gt_or_tree_(float* xs, size_t n, float needle) {
     __builtin_assume(n == 32);
     __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
     __m256 needlev = _mm256_set1_ps(needle);
@@ -566,6 +566,10 @@ size_t NOINLINE ymm_search_32_gt_or_tree(float* xs, size_t n, float needle) {
     c |= d << 8;
     a |= c << 16;
     return popcount32(a);
+}
+
+size_t NOINLINE ymm_search_32_gt_or_tree(float* xs, size_t n, float needle) {
+    return ymm_search_32_gt_or_tree_(xs, n, needle);
 }
 
 void NOINLINE ymm_search_32_gt_ss2(float* xs, size_t n, float needles[2], size_t ret[2]) {
@@ -810,6 +814,116 @@ size_t NOINLINE ymm_search_256_binary2(float* xs, size_t N, float needle) {
     }
 }
 
+union Ymmvec {
+    __m256 v;
+    float f[8];
+};
+
+__m256 ymm_256_8way_make_index(float* xs) {
+    union Ymmvec y;
+    for (size_t i = 0; i < 8; i++) {
+        y.f[i] = xs[(i+1) * 32 - 1];
+    }
+    return y.v;
+}
+
+size_t NOINLINE ymm_search_256_8way(float* xs, size_t N, float needle) {
+    (void)N;
+    __m256 needlev = _mm256_set1_ps(needle);
+    __m256 c = ymm_256_8way_make_index(xs);
+    int x = _mm256_movemask_ps(_mm256_cmp_ps(needlev, c, _CMP_GT_OQ));
+    size_t i = popcount32(x);
+    if (i == 8) return 256;
+
+    return i*32 + ymm_search_32_gt_or_tree_(xs + i*32, 32, needle);
+}
+
+size_t NOINLINE ymm_search_256_8way_cache(float* xs, size_t N, float needle, __m256 index) {
+    (void)N;
+    __m256 needlev = _mm256_set1_ps(needle);
+    size_t i = popcount32(_mm256_movemask_ps(_mm256_cmp_ps(needlev, index, _CMP_GT_OQ)));
+    if (i == 8) return 256;
+
+    return i*32 + ymm_search_32_gt_or_tree_(xs + i*32, 32, needle);
+}
+
+void NOINLINE ymm_search_256_8way_cache_ss2(float* xs, size_t N, float needles[2], size_t ret[2], __m256 index) {
+    (void)N;
+    __m256 needlev0 = _mm256_set1_ps(needles[0]);
+    __m256 needlev1 = _mm256_set1_ps(needles[1]);
+    size_t i0 = popcount32(_mm256_movemask_ps(_mm256_cmp_ps(needlev0, index, _CMP_GT_OQ)));
+    size_t i1 = popcount32(_mm256_movemask_ps(_mm256_cmp_ps(needlev1, index, _CMP_GT_OQ)));
+
+    ret[0] = i0 == 8 ? 256 : i0*32 + ymm_search_32_gt_or_tree_(xs + i0*32, 32, needles[0]);
+    ret[1] = i1 == 8 ? 256 : i1*32 + ymm_search_32_gt_or_tree_(xs + i1*32, 32, needles[1]);
+}
+
+void NOINLINE ymm_search_256_8way_cache_ss4(float* xs, size_t N, float needles[4], size_t ret[4], __m256 index) {
+    (void)N;
+    __m256 needlevs[4];
+    size_t is[4];
+    for (size_t i = 0; i < 4; i++) {
+        needlevs[i] = _mm256_set1_ps(needles[i]);
+    }
+    for (size_t i = 0; i < 4; i++) {
+        is[i] = popcount32(_mm256_movemask_ps(_mm256_cmp_ps(needlevs[i], index, _CMP_GT_OQ)));
+    }
+
+    for (size_t i = 0; i < 4; i++) {
+        ret[i] = is[i] == 8 ? 256 : is[i]*32 + ymm_search_32_gt_or_tree_(xs + is[i]*32, 32, needles[i]);
+    }
+}
+
+void NOINLINE ymm_search_256_8way_cache_ss4_nounroll(float* xs, size_t N, float needles[4], size_t ret[4], __m256 index) {
+    (void)N;
+    __m256 needlevs[4];
+    size_t is[4];
+    for (size_t i = 0; i < 4; i++) {
+        needlevs[i] = _mm256_set1_ps(needles[i]);
+    }
+    for (size_t i = 0; i < 4; i++) {
+        is[i] = popcount32(_mm256_movemask_ps(_mm256_cmp_ps(needlevs[i], index, _CMP_GT_OQ)));
+    }
+
+#pragma unroll 1
+    for (size_t i = 0; i < 4; i++) {
+        ret[i] = is[i] == 8 ? 256 : is[i]*32 + ymm_search_32_gt_or_tree_(xs + is[i]*32, 32, needles[i]);
+    }
+}
+
+void NOINLINE ymm_search_256_8way_cache_ss6(float* xs, size_t N, float needles[6], size_t ret[6], __m256 index) {
+    (void)N;
+    __m256 needlevs[6];
+    size_t is[6];
+    for (size_t i = 0; i < 6; i++) {
+        needlevs[i] = _mm256_set1_ps(needles[i]);
+    }
+    for (size_t i = 0; i < 6; i++) {
+        is[i] = popcount32(_mm256_movemask_ps(_mm256_cmp_ps(needlevs[i], index, _CMP_GT_OQ)));
+    }
+
+    for (size_t i = 0; i < 6; i++) {
+        ret[i] = is[i] == 8 ? 256 : is[i]*32 + ymm_search_32_gt_or_tree_(xs + is[i]*32, 32, needles[i]);
+    }
+}
+
+void NOINLINE ymm_search_256_8way_cache_ss8(float* xs, size_t N, float needles[8], size_t ret[8], __m256 index) {
+    (void)N;
+    __m256 needlevs[8];
+    size_t is[8];
+    for (size_t i = 0; i < 8; i++) {
+        needlevs[i] = _mm256_set1_ps(needles[i]);
+    }
+    for (size_t i = 0; i < 8; i++) {
+        is[i] = popcount32(_mm256_movemask_ps(_mm256_cmp_ps(needlevs[i], index, _CMP_GT_OQ)));
+    }
+
+    for (size_t i = 0; i < 8; i++) {
+        ret[i] = is[i] == 8 ? 256 : is[i]*32 + ymm_search_32_gt_or_tree_(xs + is[i]*32, 32, needles[i]);
+    }
+}
+
+
 // these are buggy and a bit meh in initial perf so not trying further
 
 /*size_t binary_search_ymm_16(float* xs, size_t n, float v) {*/
@@ -872,9 +986,12 @@ static void init_cdf(float* xs, size_t N, float v) {
     for (size_t i = 1; i < N; i++) { xs[i] += xs[i-1]; }
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
 static size_t round_up_size_t(size_t x, size_t N) {
     return ((x + (N - 1)) / N) * N;
 }
+#pragma clang diagnostic pop
 
 int main(int argc, char** argv) {
     float v = 0.1;
@@ -901,7 +1018,7 @@ int main(int argc, char** argv) {
                 if (i != ret) { printf("%s fail for offset=- N=%ld i=%ld v=%f exepected %ld got %ld\n", STRINGIFY(name), N, i, v, i, ret); } \
                 assert(i == ret); \
                 v = xs[i] + offset; ret = name(xs, N, v); \
-                if (i+1 != ret) { dump_array(xs, N); printf("%s fail offset=+ for N=%ld i=%ld v=%f exepected %ld got %ld\n", STRINGIFY(name), N, i, v, i+1, ret); } \
+                if (i+1 != ret) { printf("%s fail offset=+ for N=%ld i=%ld v=%f exepected %ld got %ld\n", STRINGIFY(name), N, i, v, i+1, ret); } \
                 assert(i+1 == ret);
 
                 TEST(binary_search);
@@ -937,6 +1054,7 @@ int main(int argc, char** argv) {
                         TEST(ymm_search_128_gt_or_tree);
                     }
                     if (N == 256) {
+                        TEST(ymm_search_256_8way);
                         TEST(ymm_search_256_gt);
                         TEST(ymm_search_256_binary1);
                         TEST(ymm_search_256_binary2);
@@ -998,10 +1116,15 @@ int main(int argc, char** argv) {
     /*    return 1;*/
     /*}*/
     size_t check;
+    __m256 index;
 
     for (size_t N = 8; N <= 512; N *= 2) {
         float* xs = aligned_alloc(32, sizeof(float)*N);
         init_cdf(xs, N, 0.1);
+
+        if (N == 256) {
+            index = ymm_256_8way_make_index(xs);
+        }
 
         PRNG32RomuQuad rng;
 
@@ -1017,6 +1140,16 @@ int main(int argc, char** argv) {
         clock_ns(&stop); \
         printf("  %30s %.2f ns/call %.2f ms check=%lx\n", STRINGIFY(name), (double)elapsed_ns(start, stop) / (double)rounds, (double)elapsed_ns(start, stop) / 1000000, check);
 
+#define BENCHI(name) \
+        rng_init(&rng, 42); \
+        check = 0; \
+        clock_ns(&start); \
+        for (size_t i = 0; i < rounds; i++) { \
+            check += name(xs, N, rng_float(&rng), index); \
+        } \
+        clock_ns(&stop); \
+        printf("  %30s %.2f ns/call %.2f ms check=%lx\n", STRINGIFY(name), (double)elapsed_ns(start, stop) / (double)rounds, (double)elapsed_ns(start, stop) / 1000000, check);
+
 #define BENCHK(K, name) \
         if (rounds % K != 0) { printf("rounds must be mod %d\n", K); return 1; } \
         rng_init(&rng, 42); \
@@ -1027,6 +1160,21 @@ int main(int argc, char** argv) {
             float v[K]; \
             for (size_t k = 0; k < K; k++) { v[k] = rng_float(&rng); } \
             name(xs, N, v, ret); \
+            for (size_t k = 0; k < K; k++) { check += ret[k]; } \
+        } \
+        clock_ns(&stop); \
+        printf("  %30s %.2f ns/call %.2f ms check=%lx\n", STRINGIFY(name), (double)elapsed_ns(start, stop) / (double)rounds, (double)elapsed_ns(start, stop) / 1000000, check);
+
+#define BENCHKI(K, name) \
+        if (rounds % K != 0) { printf("rounds must be mod %d\n", K); return 1; } \
+        rng_init(&rng, 42); \
+        check = 0; \
+        clock_ns(&start); \
+        for (size_t i = 0; i < rounds/K; i++) { \
+            size_t ret[K]; \
+            float v[K]; \
+            for (size_t k = 0; k < K; k++) { v[k] = rng_float(&rng); } \
+            name(xs, N, v, ret, index); \
             for (size_t k = 0; k < K; k++) { check += ret[k]; } \
         } \
         clock_ns(&stop); \
@@ -1097,10 +1245,18 @@ int main(int argc, char** argv) {
             BENCHK(8, binary_search8_256);
             BENCH(ymm_search_256_binary1);
             BENCH(ymm_search_256_binary2);
+            BENCH(ymm_search_256_8way);
+            BENCHI(ymm_search_256_8way_cache);
+            BENCHKI(2, ymm_search_256_8way_cache_ss2);
+            BENCHKI(4, ymm_search_256_8way_cache_ss4);
+            BENCHKI(4, ymm_search_256_8way_cache_ss4_nounroll);
+            BENCHKI(6, ymm_search_256_8way_cache_ss6);
+            BENCHKI(8, ymm_search_256_8way_cache_ss8);
         }
 
 #undef BENCH
 #undef BENCHK
+#undef BENCHC
 
         free(xs);
     }

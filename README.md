@@ -69,6 +69,8 @@ The `scan_inplace_ss4` is copy pasted into softmax.c so it can do the temperatur
 
 Have beaten `binary_search8` on N=64 now with ymm searching and an OR tree to combine the masks and a final popcnt at the end. I think I'm missing a hybrid approach to do better N=256.
 
+Now have a new fastest for 256, though it slightly cheats by pulling the 8way splits out once. But assuming you're doing a batch anyways, this is pretty realistic. It does 4 elements at a time checking which group of 32 it needs to check, then uses the OR tree to do each one. Larger batches weren't faster. There is this annoying check if you return 256, which for cdf's should only happen with numerical error, so if you put a known large value at the end and assume you'll return 256, you could eliminate the branches, but I don't think that would change anything really.
+
 ```
 RNG  0.77 ns/call 7.65 ms check=edcb38d7
 N=64
@@ -93,6 +95,7 @@ N=256
                  binary_search16 6.69 ns/call 24.07 ms check=1b603b46
                   ymm_search_256 14.32 ns/call 51.57 ms check=1b603b46
               binary_search8_256 5.49 ns/call 19.77 ms check=1b603b46
+   ymm_search_256_8way_cache_ss4 2.82 ns/call 10.15 ms check=1b603b46
 ```
 
 ```
