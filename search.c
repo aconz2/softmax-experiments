@@ -32,11 +32,19 @@ static u64 elapsed_ns(Timespec start, Timespec stop) {
 
 #pragma clang diagnostic pop
 
+int popcount32(u32 x) { return __builtin_popcount(x); }
+int popcount64(u64 x) { return __builtin_popcountll(x); }
+
 // NOTE: in general, these return in the range [0, n] inclusive
 // when searching a cdf, we expect v to be [0, 1) and xs[n-1] to be 1.0
 // but with numerical error, xs[n-1] might happen to be 0.998 or something and v to
 // be 0.999 in which case we will get n out, which is nonsensical for sampling
 // so consumers need to clamp the max value at n-1 to be safe
+// two thoughts
+//   1) set xs[n-1] to be INF or some "large" number like 10.0 so you always get [0, n)
+//   2) just pass in n-1 as n so that you get [0, n-1] out instead
+//      this just makes it slightly trickier since like ymm search will get confused seeing that
+//      n is not a multiple of 8
 
 // this is based on the musl
 size_t binary_search_(float* xs, size_t n, float v) {
@@ -486,23 +494,319 @@ size_t NOINLINE ymm2_search(float* xs, size_t n, float needle) {
     return n;
 }
 
+size_t NOINLINE ymm_search_16(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 16);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    __m256 c0, c1;
+    int m1, m2;
+    c0 = _mm256_cmp_ps(needlev, v[0], _CMP_LE_OQ);
+    c1 = _mm256_cmp_ps(needlev, v[1], _CMP_LE_OQ);
+    m1 = _mm256_movemask_ps(c0);
+    m2 = _mm256_movemask_ps(c1);
+    return 16 - (popcount32(m1) + popcount32(m2));
+}
+
+size_t NOINLINE ymm_search_16_gt(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 16);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    __m256 c0, c1;
+    int m0, m1;
+    c0 = _mm256_cmp_ps(needlev, v[0], _CMP_GT_OQ);
+    c1 = _mm256_cmp_ps(needlev, v[1], _CMP_GT_OQ);
+    m0 = _mm256_movemask_ps(c0);
+    m1 = _mm256_movemask_ps(c1);
+    return popcount32(m0) + popcount32(m1);
+}
+
+size_t NOINLINE ymm_search_32_gt(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 32);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    __m256 c0, c1, c2, c3;
+    int m0, m1, m2, m3;
+    c0 = _mm256_cmp_ps(needlev, v[0], _CMP_GT_OQ);
+    c1 = _mm256_cmp_ps(needlev, v[1], _CMP_GT_OQ);
+    c2 = _mm256_cmp_ps(needlev, v[2], _CMP_GT_OQ);
+    c3 = _mm256_cmp_ps(needlev, v[3], _CMP_GT_OQ);
+    m0 = _mm256_movemask_ps(c0);
+    m1 = _mm256_movemask_ps(c1);
+    m2 = _mm256_movemask_ps(c2);
+    m3 = _mm256_movemask_ps(c3);
+    return popcount32(m0) + popcount32(m1) + popcount32(m2) + popcount32(m3);
+}
+
+size_t NOINLINE ymm_search_32_gt_or(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 32);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    __m256 c;
+    u64 ret = 0;
+    for (size_t i = 0; i < 32/8; i++) {
+        c = _mm256_cmp_ps(needlev, v[i], _CMP_GT_OQ);
+        ret |= _mm256_movemask_ps(c);
+        if (i != 3) {
+            ret <<= 8;
+        }
+    }
+    return popcount32(ret);
+}
+
+size_t NOINLINE ymm_search_32_gt_or_tree(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 32);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    u64 a, b, c, d;
+    a = _mm256_movemask_ps(_mm256_cmp_ps(needlev, v[0], _CMP_GT_OQ));
+    b = _mm256_movemask_ps(_mm256_cmp_ps(needlev, v[1], _CMP_GT_OQ));
+    a |= b << 8;
+    c = _mm256_movemask_ps(_mm256_cmp_ps(needlev, v[2], _CMP_GT_OQ));
+    d = _mm256_movemask_ps(_mm256_cmp_ps(needlev, v[3], _CMP_GT_OQ));
+    c |= d << 8;
+    a |= c << 16;
+    return popcount32(a);
+}
+
+void NOINLINE ymm_search_32_gt_ss2(float* xs, size_t n, float needles[2], size_t ret[2]) {
+    __builtin_assume(n == 32);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev0 = _mm256_set1_ps(needles[0]);
+    __m256 needlev1 = _mm256_set1_ps(needles[1]);
+    __m256 c0, c1;
+    ret[0] = 0;
+    ret[1] = 0;
+    for (size_t i = 0; i < 32/8; i++) {
+        c0 = _mm256_cmp_ps(needlev0, v[i], _CMP_GT_OQ);
+        c1 = _mm256_cmp_ps(needlev1, v[i], _CMP_GT_OQ);
+        ret[0] += popcount32(_mm256_movemask_ps(c0));
+        ret[1] += popcount32(_mm256_movemask_ps(c1));
+    }
+}
+
+size_t NOINLINE ymm_search_64_gt(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 32);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    __m256 c0, c1, c2, c3, c4, c5, c6, c7;
+    int m0, m1, m2, m3, m4, m5, m6, m7;
+    c0 = _mm256_cmp_ps(needlev, v[0], _CMP_GT_OQ);
+    c1 = _mm256_cmp_ps(needlev, v[1], _CMP_GT_OQ);
+    c2 = _mm256_cmp_ps(needlev, v[2], _CMP_GT_OQ);
+    c3 = _mm256_cmp_ps(needlev, v[3], _CMP_GT_OQ);
+    c4 = _mm256_cmp_ps(needlev, v[4], _CMP_GT_OQ);
+    c5 = _mm256_cmp_ps(needlev, v[5], _CMP_GT_OQ);
+    c6 = _mm256_cmp_ps(needlev, v[6], _CMP_GT_OQ);
+    c7 = _mm256_cmp_ps(needlev, v[7], _CMP_GT_OQ);
+    m0 = _mm256_movemask_ps(c0);
+    m1 = _mm256_movemask_ps(c1);
+    m2 = _mm256_movemask_ps(c2);
+    m3 = _mm256_movemask_ps(c3);
+    m4 = _mm256_movemask_ps(c4);
+    m5 = _mm256_movemask_ps(c5);
+    m6 = _mm256_movemask_ps(c6);
+    m7 = _mm256_movemask_ps(c7);
+    return popcount32(m0) + popcount32(m1) + popcount32(m2) + popcount32(m3) + popcount32(m4) + popcount32(m5) + popcount32(m6) + popcount32(m7);
+}
+
+size_t NOINLINE ymm_search_64_gt_interleave(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 32);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    __m256 c0, c1, c2, c3, c4, c5, c6, c7;
+    size_t ret = 0;
+    c0 = _mm256_cmp_ps(needlev, v[0], _CMP_GT_OQ);
+    ret += popcount32(_mm256_movemask_ps(c0));
+    c1 = _mm256_cmp_ps(needlev, v[1], _CMP_GT_OQ);
+    ret += popcount32(_mm256_movemask_ps(c1));
+    c2 = _mm256_cmp_ps(needlev, v[2], _CMP_GT_OQ);
+    ret += popcount32(_mm256_movemask_ps(c2));
+    c3 = _mm256_cmp_ps(needlev, v[3], _CMP_GT_OQ);
+    ret += popcount32(_mm256_movemask_ps(c3));
+    c4 = _mm256_cmp_ps(needlev, v[4], _CMP_GT_OQ);
+    ret += popcount32(_mm256_movemask_ps(c4));
+    c5 = _mm256_cmp_ps(needlev, v[5], _CMP_GT_OQ);
+    ret += popcount32(_mm256_movemask_ps(c5));
+    c6 = _mm256_cmp_ps(needlev, v[6], _CMP_GT_OQ);
+    ret += popcount32(_mm256_movemask_ps(c6));
+    c7 = _mm256_cmp_ps(needlev, v[7], _CMP_GT_OQ);
+    ret += popcount32(_mm256_movemask_ps(c7));
+    return ret;
+}
+
+size_t NOINLINE ymm_search_64_gt_loop(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 64);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    __m256 c[8];
+    for (size_t i = 0; i < 8; i++) {
+        c[i] = _mm256_cmp_ps(needlev, v[i], _CMP_GT_OQ);
+    }
+    size_t ret = 0;
+    for (size_t i = 0; i < 8; i++) {
+        ret += popcount32(_mm256_movemask_ps(c[i]));
+    }
+    return ret;
+}
+
+// this is better than the above and the same as manaul interleave but easier to write
+size_t NOINLINE ymm_search_64_gt_loop_interleave(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 64);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    __m256 c;
+    size_t ret = 0;
+    for (size_t i = 0; i < 64/8; i++) {
+        c = _mm256_cmp_ps(needlev, v[i], _CMP_GT_OQ);
+        ret += popcount32(_mm256_movemask_ps(c));
+    }
+    return ret;
+}
+
+// this one isn't working, the compiler is noticing something is zero and is only doing 3 things
+// same format works for 32 and should be able to get 8 masks in one u64 so idk
+size_t NOINLINE ymm_search_64_gt_or(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 64);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    __m256 c;
+    u64 ret = 0;
+    for (size_t i = 0; i < 64/8; i++) {
+        c = _mm256_cmp_ps(needlev, v[i], _CMP_GT_OQ);
+        ret |= _mm256_movemask_ps(c);
+        if (i != 7) {
+            ret <<= 8;
+        }
+    }
+    return popcount64(ret);
+}
+
+u64 movemask64(__m256 x) { return _mm256_movemask_ps(x); }
+
+size_t ymm_search_64_gt_or_tree_(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 64);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    u64 a = 0, b = 0, c = 0, d = 0;
+
+    a = movemask64(_mm256_cmp_ps(needlev, v[0], _CMP_GT_OQ)) << 0;
+    b = movemask64(_mm256_cmp_ps(needlev, v[1], _CMP_GT_OQ)) << 8;
+    c = movemask64(_mm256_cmp_ps(needlev, v[2], _CMP_GT_OQ)) << 16;
+    d = movemask64(_mm256_cmp_ps(needlev, v[3], _CMP_GT_OQ)) << 24;
+
+    a |= movemask64(_mm256_cmp_ps(needlev, v[4], _CMP_GT_OQ)) << 32;
+    b |= movemask64(_mm256_cmp_ps(needlev, v[5], _CMP_GT_OQ)) << 40;
+    c |= movemask64(_mm256_cmp_ps(needlev, v[6], _CMP_GT_OQ)) << 48;
+    d |= movemask64(_mm256_cmp_ps(needlev, v[7], _CMP_GT_OQ)) << 56;
+
+    a |= b;
+    c |= d;
+
+    a |= c;
+    return popcount64(a);
+}
+
+size_t NOINLINE ymm_search_64_gt_or_tree(float* xs, size_t n, float needle) {
+    return ymm_search_64_gt_or_tree_(xs, n, needle);
+}
+
+size_t NOINLINE ymm_search_64_gt_or_tree2(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 64);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    u64 a = 0, b = 0, c = 0, d = 0;
+
+    a = movemask64(_mm256_cmp_ps(needlev, v[0], _CMP_GT_OQ)) << 8;
+    b = movemask64(_mm256_cmp_ps(needlev, v[1], _CMP_GT_OQ)) << 8;
+    c = movemask64(_mm256_cmp_ps(needlev, v[2], _CMP_GT_OQ)) << 8;
+    d = movemask64(_mm256_cmp_ps(needlev, v[3], _CMP_GT_OQ)) << 8;
+
+    a |= movemask64(_mm256_cmp_ps(needlev, v[4], _CMP_GT_OQ));
+    b |= movemask64(_mm256_cmp_ps(needlev, v[5], _CMP_GT_OQ));
+    c |= movemask64(_mm256_cmp_ps(needlev, v[6], _CMP_GT_OQ));
+    d |= movemask64(_mm256_cmp_ps(needlev, v[7], _CMP_GT_OQ));
+
+    a |= b << 16;
+    c |= d << 16;
+
+    a |= c << 32;
+    return popcount64(a);
+}
+
+void NOINLINE ymm_search_64_gt_ss2(float* xs, size_t n, float needles[2], size_t ret[2]) {
+    __builtin_assume(n == 64);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev0 = _mm256_set1_ps(needles[0]);
+    __m256 needlev1 = _mm256_set1_ps(needles[1]);
+    __m256 c0, c1;
+    ret[0] = 0;
+    ret[1] = 0;
+    for (size_t i = 0; i < 64/8; i++) {
+        c0 = _mm256_cmp_ps(needlev0, v[i], _CMP_GT_OQ);
+        c1 = _mm256_cmp_ps(needlev1, v[i], _CMP_GT_OQ);
+        ret[0] += popcount32(_mm256_movemask_ps(c0));
+        ret[1] += popcount32(_mm256_movemask_ps(c1));
+    }
+}
+
+size_t NOINLINE ymm_search_128_gt(float* xs, size_t n, float needle) {
+    __builtin_assume(n == 128);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 needlev = _mm256_set1_ps(needle);
+    __m256 c;
+    size_t ret = 0;
+    for (size_t i = 0; i < 128/8; i++) {
+        c = _mm256_cmp_ps(needlev, v[i], _CMP_GT_OQ);
+        ret += popcount32(_mm256_movemask_ps(c));
+    }
+    return ret;
+}
+
+size_t ymm_search_128_gt_or_tree_(float* xs, size_t n, float needle) {
+    return ymm_search_64_gt_or_tree_(xs, n, needle) + ymm_search_64_gt_or_tree_(xs + 64, n, needle);
+}
+
+size_t NOINLINE ymm_search_128_gt_or_tree(float* xs, size_t n, float needle) {
+    return ymm_search_128_gt_or_tree_(xs, n, needle);
+}
+
 size_t ymm_search_256(float* xs, size_t N, float needle) {
     (void)N;
-    return ymm_search(xs, 256, needle);
+    return ymm_search_(xs, 256, needle);
 }
 
 size_t ymm_search_128(float* xs, size_t N, float needle) {
     (void)N;
-    return ymm_search(xs, 128, needle);
+    return ymm_search_(xs, 128, needle);
 }
 
-// THIS IS BUGGY
-size_t ymm_search_256_binary1(float* xs, size_t N, float needle) {
+size_t NOINLINE ymm_search_256_gt(float* xs, size_t N, float needle) {
+    return ymm_search_128_gt_or_tree_(xs, N, needle) + ymm_search_128_gt_or_tree_(xs+128, N, needle);
+}
+
+size_t NOINLINE ymm_search_256_binary1(float* xs, size_t N, float needle) {
     (void)N;
     if (needle <= xs[128]) {
-        return ymm_search_128(xs, N, needle);
+        return ymm_search_128_gt_or_tree_(xs, N, needle);
     } else {
-        return ymm_search_128(xs + 128, N, needle);
+        return 128 + ymm_search_128_gt_or_tree_(xs + 128, N, needle);
+    }
+}
+
+size_t NOINLINE ymm_search_256_binary2(float* xs, size_t N, float needle) {
+    (void)N;
+    if (needle <= xs[128]) {
+        if (needle <= xs[64]) {
+            return ymm_search_64_gt_or_tree_(xs, N, needle);
+        } else {
+            return 64 + ymm_search_64_gt_or_tree_(xs + 64, N, needle);
+        }
+    } else {
+        if (needle <= xs[192]) {
+            return 128 + ymm_search_64_gt_or_tree_(xs + 128, N, needle);
+        } else {
+            return 192 + ymm_search_64_gt_or_tree_(xs + 192, N, needle);
+        }
     }
 }
 
@@ -580,16 +884,25 @@ int main(int argc, char** argv) {
 #ifdef RUNTEST
 
     {
-        for (size_t N = 8; N < 32; N++) {
+        size_t ret;
+        float v;
+        const float offset = 0.0001;
+        for (size_t N = 8; N <= 256; N++) {
             float* xs = aligned_alloc(32, round_up_size_t(sizeof(float)*N, 32));
             init_cdf(xs, N, 0.1);
             /*dump_array(xs, N);*/
 
             for (size_t i = 0; i < N; i++) {
 #define TEST(name) \
-                assert(i == name(xs, N, xs[i])); \
-                assert(i == name(xs, N, xs[i] - 0.01)); \
-                assert(i+1 == name(xs, N, xs[i] + 0.01)); \
+                v = xs[i]; ret = name(xs, N, v); \
+                if (i != ret) { printf("%s fail for offset=0 N=%ld i=%ld v=%f exepected %ld got %ld\n", STRINGIFY(name), N, i, v, i, ret); } \
+                assert(i == ret); \
+                v = xs[i] - offset; ret = name(xs, N, v); \
+                if (i != ret) { printf("%s fail for offset=- N=%ld i=%ld v=%f exepected %ld got %ld\n", STRINGIFY(name), N, i, v, i, ret); } \
+                assert(i == ret); \
+                v = xs[i] + offset; ret = name(xs, N, v); \
+                if (i+1 != ret) { dump_array(xs, N); printf("%s fail offset=+ for N=%ld i=%ld v=%f exepected %ld got %ld\n", STRINGIFY(name), N, i, v, i+1, ret); } \
+                assert(i+1 == ret);
 
                 TEST(binary_search);
                 TEST(linear_search);
@@ -602,6 +915,32 @@ int main(int argc, char** argv) {
                         /*TEST(binary_search_ymm_16);*/
                         /*TEST(binary_search_xmm_16);*/
                     }
+                    if (N == 16) {
+                        TEST(ymm_search_16);
+                        TEST(ymm_search_16_gt);
+                    }
+                    if (N == 32) {
+                        TEST(ymm_search_32_gt);
+                        TEST(ymm_search_32_gt_or);
+                    }
+                    if (N == 64) {
+                        TEST(ymm_search_64_gt);
+                        /*TEST(ymm_search_64_gt_or);*/
+                        TEST(ymm_search_64_gt_or_tree);
+                        TEST(ymm_search_64_gt_or_tree2);
+                        TEST(ymm_search_64_gt_loop);
+                        TEST(ymm_search_64_gt_interleave);
+                        TEST(ymm_search_64_gt_loop_interleave);
+                    }
+                    if (N == 128) {
+                        TEST(ymm_search_128_gt);
+                        TEST(ymm_search_128_gt_or_tree);
+                    }
+                    if (N == 256) {
+                        TEST(ymm_search_256_gt);
+                        TEST(ymm_search_256_binary1);
+                        TEST(ymm_search_256_binary2);
+                    }
                 }
 
 
@@ -609,7 +948,7 @@ int main(int argc, char** argv) {
                     size_t ret[2];
                     float v[2];
                     v[0] = xs[i];
-                    v[1] = xs[i] - 0.01;
+                    v[1] = xs[i] - offset;
                     binary_search2(xs, N, v, ret);
                     assert(i == ret[0]);
                     assert(i == ret[1]);
@@ -619,8 +958,8 @@ int main(int argc, char** argv) {
                     /*printf("i=%ld N-i-1=%ld xs[i]=%.2f xs[N-i-1]=%.2f ret is %ld %ld\n", i, N-i, xs[i], xs[N-i-1], ret[0], ret[1]);*/
                     assert(i == ret[0]);
                     assert(N-i-1 == ret[1]);
-                    v[0] = xs[i] + 0.01;
-                    v[1] = xs[N-i-1] + 0.01;
+                    v[0] = xs[i] + offset;
+                    v[1] = xs[N-i-1] + offset;
                     /*printf("searching %.2f %.2f\n", v[0], v[1]);*/
                     binary_search2(xs, N, v, ret);
                     /*printf("got %ld %ld expected %ld %ld\n", ret[0], ret[1], i+1, N-1);*/
@@ -726,13 +1065,38 @@ int main(int argc, char** argv) {
         BENCHK(12, binary_search12);
         BENCHK(16, binary_search16);
 
+        if (N == 16) {
+            BENCH(ymm_search_16);
+            BENCH(ymm_search_16_gt);
+        }
+        if (N == 32) {
+            BENCH(ymm_search_32_gt);
+            BENCH(ymm_search_32_gt_or);
+            BENCH(ymm_search_32_gt_or_tree);
+            BENCHK(2, ymm_search_32_gt_ss2);
+        }
+        if (N == 64) {
+            BENCH(ymm_search_64_gt);
+            BENCH(ymm_search_64_gt_or);
+            BENCH(ymm_search_64_gt_or_tree);
+            BENCH(ymm_search_64_gt_or_tree2);
+            BENCH(ymm_search_64_gt_loop);
+            BENCH(ymm_search_64_gt_loop_interleave);
+            BENCH(ymm_search_64_gt_interleave);
+            BENCHK(2, ymm_search_64_gt_ss2);
+        }
+
         if (N == 128) {
+            BENCH(ymm_search_128_gt);
+            BENCH(ymm_search_128_gt_or_tree);
             BENCH(ymm_search_128);
         }
         if (N == 256) {
             BENCH(ymm_search_256);
+            BENCH(ymm_search_256_gt);
             BENCHK(8, binary_search8_256);
-            /*BENCH(ymm_search_256_binary1);*/
+            BENCH(ymm_search_256_binary1);
+            BENCH(ymm_search_256_binary2);
         }
 
 #undef BENCH

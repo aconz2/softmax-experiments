@@ -33,7 +33,7 @@ Interestingly, the running sum version (one pass for exp and sum, one pass for d
 
 Added the scalar implementation of expf from sleef; just writing plain loops vectorizes quite well and it would handle unaligned and non mod8 sized vectors easily. Still not as fast as the avx2, it is still vbroadcastss in the loop and uses slightly different strategy for the conditional handling which loads an op from memory.
 
-Interestingly, sleef uses the range check < -104 > 104 in the scalar version for 0 and inf, but < -104 > 100 in the sse2/avx2 version; though values seem to go to those before anyhow: 88.722839 and -103.972084. I know there's a ton I don't understand about floats (and I've been testing with ffast-math) so maybe those checks make it play nice there. But it makes me think if you know you're going to clip your values in the input, you can get rid of those. Yeah things are slower without ffast-math.
+Interestingly, sleef uses the range check < -104 > 104 in the scalar version for 0 and inf, but < -104 > 100 in the sse2/avx2 version (UPDATE yes opened [issue](https://github.com/shibatch/sleef/issues/667); though values seem to go to those before anyhow: 88.722839 and -103.972084. I know there's a ton I don't understand about floats (and I've been testing with ffast-math) so maybe those checks make it play nice there. But it makes me think if you know you're going to clip your values in the input, you can get rid of those. Yeah things are slower without ffast-math.
 
 Added an nzni for nonzero nonifinity that removes the range check in the avx2 version so we promise to pass it floats in the rough range -100 to 88. It does reduce register count because two less constants.
 
@@ -67,8 +67,14 @@ The `scan_inplace_ss4` is copy pasted into softmax.c so it can do the temperatur
 
 [search.c](./search.c) has way too many variations of searching a sorted array, as if you were sampling from a cdf. fastest is `binary_search8` which is superscalar until the first element is found. There might be a bit of unfairness if the rng is faster because it gets called in batch, but idk. I tried higher number past 8 and it falls off.
 
+Have beaten `binary_search8` on N=64 now with ymm searching and an OR tree to combine the masks and a final popcnt at the end. I think I'm missing a hybrid approach to do better N=256.
+
 ```
 RNG  0.77 ns/call 7.65 ms check=edcb38d7
+N=64
+                  binary_search8 4.73 ns/call 17.04 ms check=6c374c7
+        ymm_search_64_gt_or_tree 2.86 ns/call 10.31 ms check=6c374c7
+
 N=256
                    linear_search 35.80 ns/call 128.88 ms check=1b603b46
                    binary_search 9.11 ns/call 32.81 ms check=1b603b46
