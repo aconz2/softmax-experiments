@@ -12,7 +12,8 @@ typedef struct timespec Timespec;
 #define BILLION  1000000000LL
 
 #define STRINGIFY(x) #x
-#define INLINE __attribute__((always_inline))
+/*#define INLINE __attribute__((always_inline))*/
+#define INLINE
 #define NOINLINE __attribute__((noinline))
 
 typedef uint64_t u64;
@@ -33,15 +34,17 @@ static u64 elapsed_ns(Timespec start, Timespec stop) {
 union Ymmvec { __m256 v; float f[8]; };
 union Xmmvec { __m128 v; float f[4]; };
 
+// clang doesn't care about _mm_slli_si128(__m128) but gcc wants it to be an __m128i
+
 __m128 m128_scan(__m128 x) {
     // d    c   b  a
     // c    b   a  0 +
     // dc   cb  ba a
     // ba   a   0  0 +
     // dcba cba ba a
-    x = _mm_add_ps(x, _mm_slli_si128(x, 4));
+    x = _mm_add_ps(x, (__m128)_mm_slli_si128((__m128i)x, 4));
     // clang chooses a vmovlhps with zero
-    x = _mm_add_ps(x, _mm_slli_si128(x, 8));
+    x = _mm_add_ps(x, (__m128)_mm_slli_si128((__m128i)x, 8));
     return x;
 }
 
@@ -64,9 +67,9 @@ __m256 m256_scan(__m256 x) {
     __m256 zero = _mm256_setzero_ps();
 
     // _m256_slli_si256 is a shift on each lane
-    x = _mm256_add_ps(x, _mm256_slli_si256(x, 4));
+    x = _mm256_add_ps(x, (__m256)_mm256_slli_si256((__m256i)x, 4));
     // clang chooses a vunpcklpd with zero
-    x = _mm256_add_ps(x, _mm256_slli_si256(x, 8));
+    x = _mm256_add_ps(x, (__m256)_mm256_slli_si256((__m256i)x, 8));
     // getting the dcba sum from one lane to the next is annoying
 
     // attempt 1:
