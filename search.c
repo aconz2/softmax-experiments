@@ -32,6 +32,11 @@ static u64 elapsed_ns(Timespec start, Timespec stop) {
 
 #pragma clang diagnostic pop
 
+union Ymmvec {
+    __m256 v;
+    float f[8];
+};
+
 int popcount32(u32 x) { return __builtin_popcount(x); }
 int popcount64(u64 x) { return __builtin_popcountll(x); }
 
@@ -813,11 +818,6 @@ size_t NOINLINE ymm_search_256_binary2(float* xs, size_t N, float needle) {
         }
     }
 }
-
-union Ymmvec {
-    __m256 v;
-    float f[8];
-};
 
 __m256 ymm_256_8way_make_index(float* xs) {
     union Ymmvec y;

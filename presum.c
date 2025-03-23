@@ -30,6 +30,9 @@ static u64 elapsed_ns(Timespec start, Timespec stop) {
 
 #pragma clang diagnostic pop
 
+union Ymmvec { __m256 v; float f[8]; };
+union Xmmvec { __m128 v; float f[4]; };
+
 __m128 m128_scan(__m128 x) {
     // d    c   b  a
     // c    b   a  0 +
@@ -37,8 +40,65 @@ __m128 m128_scan(__m128 x) {
     // ba   a   0  0 +
     // dcba cba ba a
     x = _mm_add_ps(x, _mm_slli_si128(x, 4));
-    // or a movelh with zero
+    // clang chooses a vmovlhps with zero
     x = _mm_add_ps(x, _mm_slli_si128(x, 8));
+    return x;
+}
+
+void dump_ymm(const char* name, __m256 y) {
+    union Ymmvec foo; foo.v = y;
+    printf("%5s: ", name);
+    for (size_t i = 0; i < 8; i++) { printf("%.2f ", foo.f[i]); }
+    printf("\n");
+}
+
+__m256 m256_scan(__m256 x) {
+    // h     g    f    e    |  d     c     b    a
+    // g     f    e    0    |  c     b     a    0 +
+    // hg    gf   fe   e    |  dc    cb    ba   a
+    // fe    e    0    0    |  ba    a     0    0 +
+    // hgfe  gfe  fe   e    |  dcba  cba   ba   a
+    // dcba  dcba dcba dcba |  0     0     0    0 +
+
+    /*__m256 sum;*/
+    __m256 zero = _mm256_setzero_ps();
+
+    // _m256_slli_si256 is a shift on each lane
+    x = _mm256_add_ps(x, _mm256_slli_si256(x, 4));
+    // clang chooses a vunpcklpd with zero
+    x = _mm256_add_ps(x, _mm256_slli_si256(x, 8));
+    // getting the dcba sum from one lane to the next is annoying
+
+    // attempt 1:
+    /*__m128 lo = _mm256_extractf128_ps(x, 0);*/
+    /*__m128 hi = _mm256_extractf128_ps(x, 1);*/
+    /*__m128 sum = _mm_permute_ps(lo, _MM_SHUFFLE(3, 3, 3, 3));*/
+    /*hi = _mm_add_ps(hi, sum);*/
+    /*return _mm256_setr_m128(lo, hi);*/
+
+    // attempt 2
+    /*__m256 sum = _mm256_set1_ps(_mm_cvtss_f32(_mm_permute_ps(_mm256_extractf128_ps(x, 0), _MM_SHUFFLE(3, 3, 3, 3))));*/
+    /*sum = _mm256_blend_ps(sum, zero, 0x0f);*/
+    /*x = _mm256_add_ps(x, sum);*/
+
+    // attempt 3
+    __m256 sum = _mm256_insertf128_ps(
+            zero,
+            _mm_permute_ps(_mm256_extractf128_ps(x, 0), _MM_SHUFFLE(3, 3, 3, 3)),
+            1
+            );
+    x = _mm256_add_ps(x, sum);
+
+    // attempt 3 WIP doesn't work
+    /*__m256 sum;*/
+    /*dump_ymm("x", x);*/
+    /*sum = _mm256_permute_ps(x, _MM_SHUFFLE(3, 3, 3, 3)); // hgfe{4} | dcba{4}*/
+    /*dump_ymm("sum", sum);*/
+    /*sum = _mm256_shuffle_ps(sum, sum, 0x00); // hgfe hgfe dcba dcba | hgfe hgfe dcba dcba*/
+    /*sum = _mm256_permute_ps(sum, _MM_SHUFFLE(0, 0, 0, 0)); // dcba{4} | dcba{4}*/
+    /*sum = _mm256_blend_ps(sum, zero, 0b11110000);*/
+    /*x = _mm256_add_ps(x, sum);*/
+
     return x;
 }
 
@@ -407,6 +467,73 @@ void NOINLINE scan_aligned_but_varying_size3(float* xs, size_t n) {
     sumv = scan_inplace_(xs, n_aligned, sumv);
 }
 
+void NOINLINE scan_inplace_ymm(float* xs, size_t n) {
+    assert(n % 8 == 0);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 x;
+    __m256 sum = _mm256_set1_ps(0);
+    for (size_t i = 0; i < n/8; i++) {
+        x = _mm256_add_ps(sum, m256_scan(v[i]));
+        // TODO is there a better way to get the sum
+        sum = _mm256_set1_ps(_mm_cvtss_f32(_mm_permute_ps(_mm256_extractf128_ps(x, 1), _MM_SHUFFLE(3, 3, 3, 3))));
+
+        v[i] = x;
+    }
+}
+
+void NOINLINE scan_inplace_ymm_ss2(float* xs, size_t n) {
+    assert(n % 8 == 0);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 sum = _mm256_set1_ps(0);
+    __m256 a, b, sa;
+    for (size_t i = 0; i < n/8; i += 2) {
+        a = _mm256_add_ps(sum, m256_scan(v[i]));
+
+        b = m256_scan(v[i + 1]);
+        sa = _mm256_set1_ps(_mm_cvtss_f32(_mm_permute_ps(_mm256_extractf128_ps(a, 1), _MM_SHUFFLE(3, 3, 3, 3))));
+
+        b = _mm256_add_ps(b, sa);
+
+        sum = _mm256_set1_ps(_mm_cvtss_f32(_mm_permute_ps(_mm256_extractf128_ps(b, 1), _MM_SHUFFLE(3, 3, 3, 3))));
+
+        v[i + 0] = a;
+        v[i + 1] = b;
+    }
+}
+
+// bad
+/*void NOINLINE scan_inplace_ymm_store(float* xs, size_t n) {*/
+/*    assert(n % 8 == 0);*/
+/*    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);*/
+/*    __m256 x;*/
+/*    __m256 sum = _mm256_set1_ps(0);*/
+/*    for (size_t i = 0; i < n/8; i++) {*/
+/*        x = _mm256_add_ps(sum, m256_scan(v[i]));*/
+/*        v[i] = x;*/
+/*        sum = _mm256_set1_ps(xs[i * 8 + 7]);*/
+/*    }*/
+/*}*/
+
+// horrendous
+/*void NOINLINE scan_inplace_ymm_store_ss2(float* xs, size_t n) {*/
+/*    assert(n % 16 == 0);*/
+/*    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);*/
+/*    __m256 sum = _mm256_set1_ps(0);*/
+/*    __m256 a, b, sa;*/
+/*    for (size_t i = 0; i < n/8; i += 2) {*/
+/*        a = _mm256_add_ps(sum, m256_scan(v[i]));*/
+/**/
+/*        b = m256_scan(v[i + 1]);*/
+/*        v[i + 0] = a;*/
+/*        sa = _mm256_set1_ps(xs[(i + 0) * 8 + 7]);*/
+/**/
+/*        b = _mm256_add_ps(b, sa);*/
+/*        v[i + 1] = b;*/
+/**/
+/*        sum = _mm256_set1_ps(xs[(i + 1) * 8 + 7]);*/
+/*    }*/
+/*}*/
+
 
 void dump_array(float* xs, size_t N) {
     for (size_t i = 0; i < N; i++) {
@@ -436,13 +563,26 @@ float total_diff(float* ref, float* xs, size_t N) {
 int main() {
 
 #ifdef RUNTEST
+    {
+        union Ymmvec y;
+        union Xmmvec x;
+        for (size_t i = 0; i < 4; i++) { x.f[i] = 0.1; y.f[i] = 0.1; }
+        for (size_t i = 4; i < 8; i++) { y.f[i] = 0.2; }
+        dump_array(x.f, 4);
+        x.v = m128_scan(x.v);
+        dump_array(x.f, 4);
+
+        dump_array(y.f, 8);
+        y.v = m256_scan(y.v);
+        dump_array(y.f, 8);
+    }
     // this is a fudged number by empirical testing of what the tests have done
     const double MAX_AVG_DIFF = 1e-06;
     {
         size_t N = 32;
         float diff = 0;
-        float* xs = aligned_alloc(16, sizeof(float)*N);
-        float* ref = aligned_alloc(16, sizeof(float)*N);
+        float* xs = aligned_alloc(32, sizeof(float)*N);
+        float* ref = aligned_alloc(32, sizeof(float)*N);
         // for testing we want to concentrate on the case of numbers in [0, 1)
         init_norm(xs, N, 0.1);
         init_norm(ref, N, 0.1);
@@ -454,13 +594,15 @@ int main() {
 #define TEST(name) \
         name(xs, N); \
         dump_array(xs, N); \
-        diff = total_diff(ref, xs, N);
+        diff = total_diff(ref, xs, N); \
         printf("%s total diff %f avg diff %e\n", STRINGIFY(name), diff, (double)diff / N); \
         assert((double)diff / N <= MAX_AVG_DIFF); \
         init_norm(xs, N, 0.1);
 
         TEST(scan_simple);
         TEST(scan_inplace);
+        TEST(scan_inplace_ymm);
+        TEST(scan_inplace_ymm_ss2);
         TEST(scan_inplace_ss2);
         TEST(scan_inplace_ss4);
         TEST(scan_unaligned_simple);
@@ -471,7 +613,7 @@ int main() {
         free(xs);
         free(ref);
     }
-    {
+    if (0) {
         float diff = 0;
         size_t N = 48;
         float* xs = aligned_alloc(16, sizeof(float)*N);
@@ -520,9 +662,10 @@ int main() {
 
     Timespec start, stop;
 
-    /*for (size_t N = 8; N <= 512; N += 8) {*/
-    for (size_t N = 8; N <= 128; N += 1) {
-        float* xs = aligned_alloc(16, sizeof(float)*N);
+    /*for (size_t N = 16; N <= 512; N += 16) {*/
+    for (size_t N = 8; N <= 512; N *= 2) {
+    /*for (size_t N = 8; N <= 128; N += 1) {*/
+        float* xs = aligned_alloc(32, sizeof(float)*N);
         for (size_t i = 0; i < N; i++) { xs[i] = 0.1 * i; }
         printf("N=%ld\n", N);
 
@@ -540,10 +683,15 @@ int main() {
             BENCH(scan_inplace);
         }
         if (N % 8 == 0) {
+            BENCH(scan_inplace_ymm);
             BENCH(scan_inplace_ss2);
         }
         if (N % 16 == 0) {
+            BENCH(scan_inplace_ymm_ss2);
             BENCH(scan_inplace_ss4);
+        }
+
+        if (N % 16 == 0) {
         }
         BENCH(scan_unaligned_simple);
         BENCH(scan_unaligned);
