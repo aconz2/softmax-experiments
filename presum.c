@@ -49,6 +49,9 @@ __m128 m128_scan(__m128 x) {
 }
 
 void dump_ymm(const char* name, __m256 y) {
+#ifdef NDEBUG
+    return;
+#endif
     union Ymmvec foo; foo.v = y;
     printf("%5s: ", name);
     for (size_t i = 0; i < 8; i++) { printf("%.2f ", foo.f[i]); }
@@ -85,6 +88,7 @@ __m256 m256_scan(__m256 x) {
     /*x = _mm256_add_ps(x, sum);*/
 
     // attempt 3
+    // yeah this doesn't make sense, may as well just _mm_add_ps and reconstruct
     __m256 sum = _mm256_insertf128_ps(
             zero,
             _mm_permute_ps(_mm256_extractf128_ps(x, 0), _MM_SHUFFLE(3, 3, 3, 3)),
@@ -103,6 +107,39 @@ __m256 m256_scan(__m256 x) {
     /*x = _mm256_add_ps(x, sum);*/
 
     return x;
+}
+
+void m256_scan_partial(__m256 x, __m128 ret[2]) {
+    //         ret[1]       |         ret[0]
+    // hgfe  gfe  fe   e    |  dcba  cba   ba   a
+    x = _mm256_add_ps(x, (__m256)_mm256_slli_si256((__m256i)x, 4));
+    x = _mm256_add_ps(x, (__m256)_mm256_slli_si256((__m256i)x, 8));
+    ret[0] = _mm256_extractf128_ps(x, 0);
+    ret[1] = _mm256_extractf128_ps(x, 1);
+}
+
+__m256 m256_scan_partial2(__m256 x) {
+    // hgfe  gfe  fe   e    |  dcba  cba   ba   a
+    x = _mm256_add_ps(x, (__m256)_mm256_slli_si256((__m256i)x, 4));
+    x = _mm256_add_ps(x, (__m256)_mm256_slli_si256((__m256i)x, 8));
+    return x;
+}
+
+__m256 m256_scan2(__m256 x, __m256* ret) {
+    // hgfe  gfe  fe   e    |  dcba  cba   ba   a
+    // ret[0] = hgfe{4} | dcba{4}
+    // ret[1] = dcba{4} | hgfe{4}
+    x = _mm256_add_ps(x, (__m256)_mm256_slli_si256((__m256i)x, 4));
+    x = _mm256_add_ps(x, (__m256)_mm256_slli_si256((__m256i)x, 8));
+    __m256 a = _mm256_permutevar8x32_ps(x, _mm256_set_epi32(7, 7, 7, 7, 3, 3, 3, 3));
+    __m256 b = _mm256_permutevar8x32_ps(x, _mm256_set_epi32(3, 3, 3, 3, 7, 7, 7, 7));
+    *ret = _mm256_add_ps(a, b);
+    return x;
+}
+
+__m256 m256_broadcast_hi(__m256 x) {
+    x = _mm256_shuffle_ps(x, x, _MM_SHUFFLE(3, 3, 3, 3));
+    return _mm256_permute2f128_ps(x, x, 0b00010001);
 }
 
 void scan_simple_(float* xs, size_t n, float sum) {
@@ -485,7 +522,7 @@ void NOINLINE scan_inplace_ymm(float* xs, size_t n) {
 }
 
 void NOINLINE scan_inplace_ymm_ss2(float* xs, size_t n) {
-    assert(n % 8 == 0);
+    assert(n % 16 == 0);
     __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
     __m256 sum = _mm256_set1_ps(0);
     __m256 a, b, sa;
@@ -501,6 +538,99 @@ void NOINLINE scan_inplace_ymm_ss2(float* xs, size_t n) {
 
         v[i + 0] = a;
         v[i + 1] = b;
+    }
+}
+
+void NOINLINE scan_inplace_ymm_mixed(float* xs, size_t n) {
+    assert(n % 8 == 0);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m128 sum = _mm_set1_ps(0);
+    __m128 xmm[2];
+
+    for (size_t i = 0; i < n/8; i++) {
+        m256_scan_partial(v[i], xmm);
+        xmm[0] = _mm_add_ps(xmm[0], sum); // sdcba scba sba sa
+        sum = _mm_shuffle_ps(xmm[0], xmm[0], _MM_SHUFFLE(3, 3, 3, 3));
+        xmm[1] = _mm_add_ps(xmm[1], sum);
+        sum = _mm_shuffle_ps(xmm[1], xmm[1], _MM_SHUFFLE(3, 3, 3, 3));
+
+        v[i] = _mm256_setr_m128(xmm[0], xmm[1]);
+    }
+}
+
+void NOINLINE scan_inplace_ymm_mixed_ss2(float* xs, size_t n) {
+    assert(n % 16 == 0);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m128 sum = _mm_set1_ps(0);
+    /*__m128 s1 = _mm_set1_ps(0);*/
+    __m128 a[2], b[2];
+
+    for (size_t i = 0; i < n/8; i += 2) {
+        m256_scan_partial(v[i+0], a);
+        m256_scan_partial(v[i+1], b);
+
+        a[0] = _mm_add_ps(a[0], sum);
+        b[1] = _mm_add_ps(b[1], _mm_shuffle_ps(b[0], b[0], _MM_SHUFFLE(3, 3, 3, 3)));
+
+        a[1] = _mm_add_ps(a[1], _mm_shuffle_ps(a[0], a[0], _MM_SHUFFLE(3, 3, 3, 3)));
+
+        sum = _mm_shuffle_ps(a[1], a[1], _MM_SHUFFLE(3, 3, 3, 3));
+        b[0] = _mm_add_ps(b[0], sum);
+        b[1] = _mm_add_ps(b[1], sum);
+
+        sum = _mm_shuffle_ps(b[1], b[1], _MM_SHUFFLE(3, 3, 3, 3));
+
+        v[i+0] = _mm256_setr_m128(a[0], a[1]);
+        v[i+1] = _mm256_setr_m128(b[0], b[1]);
+    }
+}
+
+void NOINLINE scan_inplace_ymm_ss2_v2(float* xs, size_t n) {
+    assert(n % 16 == 0);
+    __m256* v = (__m256*)__builtin_assume_aligned(xs, 32);
+    __m256 sum = _mm256_set1_ps(0);
+    __m256 a, b, a_hl, a_lh, a_l0, b_hl, b_l0;
+    /*__m128 a_lo, a_hi, a_lo_sum;*/
+    __m256 ta, tb;
+
+    __m256 mask = _mm256_set_epi32(0, 0, 0, 0, -1, -1, -1, -1);
+
+    for (size_t i = 0; i < n/8; i += 2) {
+        a = v[i+0];
+        b = v[i+1];
+
+        // manual inlining
+        a = _mm256_add_ps(a, _mm256_slli_si256(a, 4));
+        b = _mm256_add_ps(b, _mm256_slli_si256(b, 4));
+        a = _mm256_add_ps(a, _mm256_slli_si256(a, 8));
+        b = _mm256_add_ps(b, _mm256_slli_si256(b, 8));
+
+        dump_ymm("a", a);
+        dump_ymm("b", b);
+
+        a_hl = _mm256_shuffle_ps(a, a, _MM_SHUFFLE(3, 3, 3, 3)); // hgfe{4} | dcba{4}
+        b_hl = _mm256_shuffle_ps(b, b, _MM_SHUFFLE(3, 3, 3, 3)); // B hgfe{4} | dcba{4}
+        a_lh = _mm256_permute2f128_ps(a_hl, a_hl, 0b00000001); // dcba{4} | hgfe{4}
+        a_l0 = _mm256_permute2f128_ps(a_hl, a_hl, 0b00001000);  // dcba{4} | 0{4}
+        b_l0 = _mm256_permute2f128_ps(b_hl, b_hl, 0b00001000);  // B dcba{4} | 0{4}
+
+        dump_ymm("a_hl", a_hl);
+        dump_ymm("a_lh", a_lh);
+        dump_ymm("a_l0", a_l0);
+
+        b = _mm256_add_ps(b,
+                _mm256_add_ps(
+                    _mm256_add_ps(a_hl, a_lh),
+                    _mm256_add_ps(b_l0, sum)
+                    )
+                );
+
+        a = _mm256_add_ps(a, _mm256_add_ps(a_l0, sum));
+
+        sum = m256_broadcast_hi(b);
+
+        v[i+0] = a;
+        v[i+1] = b;
     }
 }
 
@@ -576,7 +706,15 @@ int main() {
         dump_array(x.f, 4);
 
         dump_array(y.f, 8);
-        y.v = m256_scan(y.v);
+        /*y.v = m256_scan(y.v);*/
+        union Ymmvec foo;
+        y.v = m256_scan2(y.v, &foo.v);
+        dump_array(y.f, 8);
+        dump_array(foo.f, 8);
+
+        for (size_t i = 0; i < 8; i++) { y.f[i] = i; }
+        dump_array(y.f, 8);
+        y.v = m256_broadcast_hi(y.v);
         dump_array(y.f, 8);
     }
     // this is a fudged number by empirical testing of what the tests have done
@@ -605,6 +743,9 @@ int main() {
         TEST(scan_simple);
         TEST(scan_inplace);
         TEST(scan_inplace_ymm);
+        TEST(scan_inplace_ymm_mixed);
+        TEST(scan_inplace_ymm_mixed_ss2);
+        TEST(scan_inplace_ymm_ss2_v2);
         TEST(scan_inplace_ymm_ss2);
         TEST(scan_inplace_ss2);
         TEST(scan_inplace_ss4);
@@ -679,7 +820,7 @@ int main() {
             for (size_t i = 0; i < N; i++) { xs[i] = 0.1 * i; } \
         } \
         clock_ns(&stop); \
-        printf("  %20s %.2f ns/el %.2f ms\n", #name, (double)elapsed_ns(start, stop) / (double)(rounds / N) / (double)N, (double)elapsed_ns(start, stop) / 1000000);
+        printf("  %30s %.2f ns/el %.2f ms\n", #name, (double)elapsed_ns(start, stop) / (double)(rounds / N) / (double)N, (double)elapsed_ns(start, stop) / 1000000);
 
         BENCH(scan_simple);
         if (N % 4 == 0) {
@@ -687,10 +828,13 @@ int main() {
         }
         if (N % 8 == 0) {
             BENCH(scan_inplace_ymm);
+            BENCH(scan_inplace_ymm_mixed);
             BENCH(scan_inplace_ss2);
         }
         if (N % 16 == 0) {
             BENCH(scan_inplace_ymm_ss2);
+            BENCH(scan_inplace_ymm_mixed_ss2);
+            BENCH(scan_inplace_ymm_ss2_v2);
             BENCH(scan_inplace_ss4);
         }
 
