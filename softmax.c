@@ -82,7 +82,6 @@ static void INLINE scan_inplace_ss4(float* xs, size_t N, int dodiv, float div) {
 }
 
 __m256 INLINE m256_hadd(__m256 x) {
-    // h g f e d b c a
     __m128 sum = _mm_add_ps(
         _mm256_extractf128_ps(x, 0),
         _mm256_extractf128_ps(x, 1)
@@ -90,6 +89,17 @@ __m256 INLINE m256_hadd(__m256 x) {
     sum = m128_scan(sum);
     sum = _mm_shuffle_ps(sum, sum, _MM_SHUFFLE(3, 3, 3, 3));
     return _mm256_set_m128(sum, sum);
+}
+
+__m128 INLINE m256_hadd_m128(__m256 x) {
+    // h g f e d b c a
+    __m128 sum = _mm_add_ps(
+        _mm256_extractf128_ps(x, 0),
+        _mm256_extractf128_ps(x, 1)
+        );
+    sum = m128_scan(sum);
+    sum = _mm_shuffle_ps(sum, sum, _MM_SHUFFLE(3, 3, 3, 3));
+    return sum;
 }
 
 static void INLINE do_sum(float* xs, size_t N, int sumkind) {
@@ -106,6 +116,7 @@ static void INLINE do_sum(float* xs, size_t N, int sumkind) {
     } else if (sumkind == 1) {
         xs[0] /= sum;
         for (size_t i = 1; i < N; i++) {
+            // this becomes a fmadd
             xs[i] = xs[i - 1] + xs[i] / sum;
         }
     } else if (sumkind == 2) {
@@ -245,6 +256,176 @@ void NOINLINE softmax_sleefredux_avx2_running_sum(float* restrict src, float* re
     /*for (size_t i = 0; i < N; i++) {*/
     /*    dst[i] /= ssum;*/
     /*}*/
+}
+
+void m256_scan_partial(__m256 x, __m128 ret[2]) {
+    //         ret[1]       |         ret[0]
+    // hgfe  gfe  fe   e    |  dcba  cba   ba   a
+    x = _mm256_add_ps(x, (__m256)_mm256_slli_si256((__m256i)x, 4));
+    x = _mm256_add_ps(x, (__m256)_mm256_slli_si256((__m256i)x, 8));
+    ret[0] = _mm256_extractf128_ps(x, 0);
+    ret[1] = _mm256_extractf128_ps(x, 1);
+}
+
+void NOINLINE softmax_sleefredux_avx2_running_presum_mixed(float* restrict src, float* restrict dst, size_t N) {
+    __builtin_assume(N >= 8);
+    __m256* restrict srcv = __builtin_assume_aligned(src, 32);
+    __m256* restrict dstv = __builtin_assume_aligned(dst, 32);
+    __m256 sum = _mm256_set1_ps(0);
+    __m256 x;
+#pragma unroll 1
+    for (size_t i = 0; i < N/8; i++) {
+        x = Sleef_redux_expf8_u10avx2(srcv[i]);
+        sum = _mm256_add_ps(sum, x);
+        dstv[i] = x;
+    }
+    // this generates (vmovaps vmulps){4} whereas the auto vectorizer generates vmulps{4} vmovaps{4}
+    sum = m256_hadd(sum);
+    __m128 xmm[2];
+    __m128 presum = _mm_set1_ps(0);
+    for (size_t i = 0; i < N/8; i++) {
+        x = _mm256_div_ps(dstv[i], sum);
+
+        m256_scan_partial(x, xmm);
+        xmm[0] = _mm_add_ps(xmm[0], presum); // sdcba scba sba sa
+        presum = _mm_shuffle_ps(xmm[0], xmm[0], _MM_SHUFFLE(3, 3, 3, 3));
+        xmm[1] = _mm_add_ps(xmm[1], presum);
+        presum = _mm_shuffle_ps(xmm[1], xmm[1], _MM_SHUFFLE(3, 3, 3, 3));
+
+        x = _mm256_setr_m128(xmm[0], xmm[1]);
+        dstv[i] = x;
+    }
+}
+
+// ss2 is a bit misleading, but we do 2 divs at a time, but then unpack and do an ss4 presum
+void softmax_sleefredux_avx2_running_presum_mixed_ss2_(float* restrict src, float* restrict dst, size_t N, int dotemp, float temp) {
+    __builtin_assume(N >= 8);
+    __m256* restrict srcv = __builtin_assume_aligned(src, 32);
+    __m256* restrict dstv = __builtin_assume_aligned(dst, 32);
+    __m256 sum = _mm256_set1_ps(0);
+    __m256 x, x0, x1;
+    // tiny bump ~ .01ns with unrolling but the tail handling generates bad looking code
+#pragma unroll 1
+    for (size_t i = 0; i < N/8; i++) {
+        x = Sleef_redux_expf8_u10avx2(dotemp ? _mm256_div_ps(srcv[i], _mm256_set1_ps(temp)) : srcv[i]);
+        sum = _mm256_add_ps(sum, x);
+        dstv[i] = x;
+    }
+
+    if (N == 8) {
+        float tot = _mm_cvtss_f32(m256_hadd_m128(sum));
+        dst[0] /= tot;
+        // this becomes an unrolled fmadd
+        for (size_t i = 1; i < N; i++) {
+            dst[i] = dst[i - 1] + dst[i] / tot;
+        }
+        return;
+    }
+
+    sum = m256_hadd(sum);
+    __m128 xmm[4];
+    __m128 presum = _mm_set1_ps(0);
+    /*__m128 sa, sb, sc;*/
+    __m128 a, b, c, d, sa, sb, sc;
+    for (size_t i = 0; i < N/8; i += 2) {
+        x0 = _mm256_div_ps(dstv[i+0], sum);
+        x1 = _mm256_div_ps(dstv[i+1], sum);
+
+        m256_scan_partial(x0, xmm);
+        m256_scan_partial(x1, xmm + 2);
+
+        a = xmm[0]; b = xmm[1]; c = xmm[2]; d = xmm[3];
+
+        a = _mm_add_ps(a, presum);
+        sa = _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 3, 3, 3)); // sabcd
+        sc = _mm_shuffle_ps(c, c, _MM_SHUFFLE(3, 3, 3, 3)); // ijkl
+
+        b = _mm_add_ps(b, sa);
+        d = _mm_add_ps(d, sc); // ijklmnop
+
+        sb = _mm_shuffle_ps(b, b, _MM_SHUFFLE(3, 3, 3, 3)); // sabcdefgh
+        c = _mm_add_ps(c, sb); // sabcdefghijkl
+        d = _mm_add_ps(d, sb);
+
+        presum = _mm_shuffle_ps(d, d, _MM_SHUFFLE(3, 3, 3, 3));
+
+        // clang is smart enough to not do an insert and keeps us from having to fiddle with addresses
+        x0 = _mm256_setr_m128(a, b);
+        x1 = _mm256_setr_m128(c, d);
+
+        dstv[i+0] = x0;
+        dstv[i+1] = x1;
+    }
+}
+
+void NOINLINE softmax_sleefredux_avx2_running_presum_mixed_ss2(float* restrict src, float* restrict dst, size_t N) {
+    return softmax_sleefredux_avx2_running_presum_mixed_ss2_(src, dst, N, 0, 0.0);
+}
+
+void NOINLINE softmax_sleefredux_avx2_running_presum_mixed_ss2_temp(float* restrict src, float* restrict dst, size_t N, float temp) {
+    return softmax_sleefredux_avx2_running_presum_mixed_ss2_(src, dst, N, 1, temp);
+}
+
+
+void NOINLINE softmax_sleefredux_avx2_running_presum_xmm_ss4(float* restrict src, float* restrict dst, size_t N) {
+    __builtin_assume(N >= 16);
+    __m128 tot;
+    {
+        __m256* restrict srcv = __builtin_assume_aligned(src, 32);
+        __m256* restrict dstv = __builtin_assume_aligned(dst, 32);
+
+        __m256 sum = _mm256_set1_ps(0);
+        __m256 x;
+#pragma unroll 1
+        for (size_t i = 0; i < N/8; i++) {
+            x = Sleef_redux_expf8_u10avx2(srcv[i]);
+            sum = _mm256_add_ps(sum, x);
+            dstv[i] = x;
+        }
+        tot = m256_hadd_m128(sum);
+    }
+
+    if (N <= 16) {
+        float sum = _mm_cvtss_f32(tot);
+        dst[0] /= sum;
+        for (size_t i = 1; i < N; i++) {
+            // this becomes a fmadd
+            dst[i] = dst[i - 1] + dst[i] / sum;
+        }
+        return;
+    }
+
+    {
+        __m128* restrict srcv = (__m128*)__builtin_assume_aligned(src, 16);
+        __m128* restrict dstv = (__m128*)__builtin_assume_aligned(src, 16);
+        __m128 sum = _mm_set1_ps(0);
+        __m128 a, b, c, d, sa, sb, sc;
+        for (size_t i = 0; i < N/4; i += 4) {
+            a = _mm_add_ps(sum, m128_scan(_mm_div_ps(srcv[i], tot)));
+
+            b = m128_scan(_mm_div_ps(srcv[i + 1], tot)); // hgfe gfe fe e
+            c = m128_scan(_mm_div_ps(srcv[i + 2], tot)); // lkji
+            d = m128_scan(_mm_div_ps(srcv[i + 3], tot)); // ponm
+
+            sa = _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 3, 3, 3)); // sabcd
+            sc = _mm_shuffle_ps(c, c, _MM_SHUFFLE(3, 3, 3, 3)); // ijkl
+
+            b = _mm_add_ps(b, sa);
+            d = _mm_add_ps(d, sc); // ijklmnop
+
+            sb = _mm_shuffle_ps(b, b, _MM_SHUFFLE(3, 3, 3, 3)); // sabcdefgh
+            c = _mm_add_ps(c, sb); // sabcdefghijkl
+            d = _mm_add_ps(d, sb);
+
+            sum = _mm_shuffle_ps(d, d, _MM_SHUFFLE(3, 3, 3, 3));
+
+            dstv[i + 0] = a;
+            dstv[i + 1] = b;
+            dstv[i + 2] = c;
+            dstv[i + 3] = d;
+        }
+    }
+
 }
 
 void NOINLINE softmax_sleefredux_avx2_nzni_running_sum(float* restrict src, float* restrict dst, size_t N) {
@@ -432,12 +613,12 @@ int main(int argc, char** argv) {
     size_t size_max = 32;
 #else
     size_t rounds = 1000000;
-    size_t size_max = 512;
+    size_t size_max = 256;
 #endif
 
     Timespec start, stop;
 
-    for (size_t N = 16; N <= size_max; N *= 2) {
+    for (size_t N = 8; N <= size_max; N *= 2) {
         float* xs = aligned_alloc(32, sizeof(float)*N*2);
         float* dst = xs + N;
         for (size_t i = 0; i < N; i++) {
@@ -452,23 +633,33 @@ int main(int argc, char** argv) {
             softmax_##name(xs, dst, N); \
         } \
         clock_ns(&stop); \
-        printf("  %30s %.2f ns/el %.2f ms\n", STRINGIFY(name), (double)elapsed_ns(start, stop) / (double)rounds / (double)N, (double)elapsed_ns(start, stop) / 1000000);
+        printf("  %40s %.2f ns/el %.2f ms\n", STRINGIFY(name), (double)elapsed_ns(start, stop) / (double)rounds / (double)N, (double)elapsed_ns(start, stop) / 1000000);
 
-        BENCH(math_sum)
-        BENCH(sleef_sum)
-        BENCH(sleefredux_scalar_sum)
-        BENCH(sleefredux_scalar_running_sum)
-        BENCH(sleefredux_sse2_sum)
-        BENCH(sleefredux_avx2_sum)
-        BENCH(sleefredux_avx2_running_sum)
-        BENCH(sleefredux_avx2_nzni_sum)
-        BENCH(sleefredux_avx2_nzni_running_sum)
+        if (N == 8) {
+            BENCH(sleefredux_avx2_running_presum_mixed_ss2)
+        }
 
-        BENCH(math_presum)
-        BENCH(sleef_presum)
-        BENCH(sleefredux_avx2_presum)
+        if (N >= 16) {
+            BENCH(math_sum)
+            BENCH(sleef_sum)
+            BENCH(sleefredux_scalar_sum)
+            BENCH(sleefredux_scalar_running_sum)
+            BENCH(sleefredux_sse2_sum)
+            BENCH(sleefredux_avx2_sum)
+            BENCH(sleefredux_avx2_running_sum)
+            BENCH(sleefredux_avx2_nzni_sum)
+            BENCH(sleefredux_avx2_nzni_running_sum)
 
-        BENCH(sleefredux_avx2_presum_ss4)
+            BENCH(math_presum)
+            BENCH(sleef_presum)
+            BENCH(sleefredux_avx2_presum)
+            BENCH(sleefredux_avx2_running_presum_mixed)
+            BENCH(sleefredux_avx2_running_presum_mixed_ss2)
+            BENCH(sleefredux_avx2_running_presum_xmm_ss4)
+            BENCH(sleefredux_avx2_running_presum_mixed_ss2)
+
+            BENCH(sleefredux_avx2_presum_ss4)
+        }
 
         if (N == 256) {
             BENCH(sleefredux_scalar_sum256);
@@ -482,28 +673,32 @@ int main(int argc, char** argv) {
             softmax_##name(xs, dst, N, temp); \
         } \
         clock_ns(&stop); \
-        printf("  %30s %.2f ns/el %.2f ms\n", STRINGIFY(name), (double)elapsed_ns(start, stop) / (double)rounds / (double)N, (double)elapsed_ns(start, stop) / 1000000);
+        printf("  %40s %.2f ns/el %.2f ms\n", STRINGIFY(name), (double)elapsed_ns(start, stop) / (double)rounds / (double)N, (double)elapsed_ns(start, stop) / 1000000);
 
-        // inspecting the asm, compiler changes the division to a multiplication anyways
-        BENCH(math_sum_tempdiv)
-        /*BENCH(math_sum_tempmul)*/
+        BENCH(sleefredux_avx2_running_presum_mixed_ss2_temp);
 
-        BENCH(sleef_sum_tempdiv)
-        /*BENCH(sleef_sum_tempmul)*/
+        if (N >= 16) {
+            // inspecting the asm, compiler changes the division to a multiplication anyways
+            BENCH(math_sum_tempdiv)
+            /*BENCH(math_sum_tempmul)*/
 
-        BENCH(sleefredux_avx2_sum_tempdiv)
-        /*BENCH(sleefredux_avx2_sum_tempmul)*/
+            BENCH(sleef_sum_tempdiv)
+            /*BENCH(sleef_sum_tempmul)*/
 
-        BENCH(math_presum_tempdiv)
-        /*BENCH(math_presum_tempmul)*/
+            BENCH(sleefredux_avx2_sum_tempdiv)
+            /*BENCH(sleefredux_avx2_sum_tempmul)*/
 
-        BENCH(sleef_presum_tempdiv)
-        /*BENCH(sleef_presum_tempmul)*/
+            BENCH(math_presum_tempdiv)
+            /*BENCH(math_presum_tempmul)*/
 
-        BENCH(sleefredux_avx2_presum_tempdiv)
-        /*BENCH(sleefredux_avx2_presum_tempmul)*/
+            BENCH(sleef_presum_tempdiv)
+            /*BENCH(sleef_presum_tempmul)*/
 
-        BENCH(sleefredux_avx2_presum_ss4_tempdiv)
+            BENCH(sleefredux_avx2_presum_tempdiv)
+            /*BENCH(sleefredux_avx2_presum_tempmul)*/
+
+            BENCH(sleefredux_avx2_presum_ss4_tempdiv)
+        }
 
 #undef BENCH
 

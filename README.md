@@ -37,8 +37,16 @@ Interestingly, sleef uses the range check < -104 > 104 in the scalar version for
 
 Added an nzni for nonzero nonifinity that removes the range check in the avx2 version so we promise to pass it floats in the rough range -100 to 88. It does reduce register count because two less constants.
 
+The last two are I think the conclusion of all of this. They do ymm exp (they should be labeled nzni) with running sum, then a ss2 ymm divison by the norm, a partial scan in ymm, then the rest as a ss4 xmm scan (since there is no good AFAIK full ymm scan). They also are fastest down to size 16 and also handle size 8, switching to a simpler presum. There is a tiny thing I'm wondering about where the non-temp version does `vmovaps ymm11, mem; vmulps ymm12, ymm11, ymm1` and the temp version does `vmulps ymm13, ymm2, mem; vmulps ymm14, ymm13, ymm3` where that first mul is multiplying by the temperature and folds the load into it. I'm wondering why the non-temp version doesn't just fold the mov into the mul.
+
 ```
 (all these names have the `softmax_` prefix removed)
+N=8
+  sleefredux_avx2_running_presum_mixed_ss2 1.00 ns/el 8.03 ms
+  sleefredux_avx2_running_presum_mixed_ss2_temp 1.12 ns/el 8.95 ms
+N=16
+  sleefredux_avx2_running_presum_mixed_ss2 0.74 ns/el 11.86 ms
+  sleefredux_avx2_running_presum_mixed_ss2_temp 0.82 ns/el 13.15 ms
 N=256
                         math_sum 2.35 ns/el 601.85 ms
                        sleef_sum 0.53 ns/el 134.84 ms
@@ -61,6 +69,8 @@ N=256
             sleef_presum_tempdiv 1.35 ns/el 345.13 ms
   sleefredux_avx2_presum_tempdiv 1.18 ns/el 301.10 ms
   sleefredux_avx2_presum_ss4_tempdiv 0.65 ns/el 166.84 ms
+  sleefredux_avx2_running_presum_mixed_ss2 0.51 ns/el 130.08 ms
+  sleefredux_avx2_running_presum_mixed_ss2_temp 0.53 ns/el 134.57 ms
 ```
 
 The `scan_inplace_ss4` is copy pasted into softmax.c so it can do the temperature division all in one

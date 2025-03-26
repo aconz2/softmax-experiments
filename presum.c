@@ -591,9 +591,9 @@ void NOINLINE scan_inplace_ymm_ss2_v2(float* xs, size_t n) {
     __m256 sum = _mm256_set1_ps(0);
     __m256 a, b, a_hl, a_lh, a_l0, b_hl, b_l0;
     /*__m128 a_lo, a_hi, a_lo_sum;*/
-    __m256 ta, tb;
+    /*__m256 ta, tb;*/
 
-    __m256 mask = _mm256_set_epi32(0, 0, 0, 0, -1, -1, -1, -1);
+    /*__m256 mask = _mm256_set_epi32(0, 0, 0, 0, -1, -1, -1, -1);*/
 
     for (size_t i = 0; i < n/8; i += 2) {
         a = v[i+0];
