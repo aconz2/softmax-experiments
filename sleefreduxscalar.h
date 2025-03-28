@@ -74,6 +74,26 @@ float Sleef_redux_finz_expf_u10scalar(float d) {
   return u;
 }
 
+float Sleef_redux_expf_u10scalar(float d) {
+  int q = (int)sleef_rintfk(d * R_LN2f);
+  float s, u;
+
+  s = sleef_mlaf(q, -L2Uf, d);
+  s = sleef_mlaf(q, -L2Lf, s);
+
+  u = 0.000198527617612853646278381;
+  u = sleef_mlaf(u, s, 0.00139304355252534151077271);
+  u = sleef_mlaf(u, s, 0.00833336077630519866943359);
+  u = sleef_mlaf(u, s, 0.0416664853692054748535156);
+  u = sleef_mlaf(u, s, 0.166666671633720397949219);
+  u = sleef_mlaf(u, s, 0.5);
+
+  u = s * s * u + s + 1.0f;
+  u = sleef_ldexp2kf(u, q);
+
+  return u;
+}
+
 #undef SLEEF_INFINITYf
 #undef R_LN2f
 #undef INLINE
